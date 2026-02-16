@@ -273,12 +273,52 @@ export async function handleOpenAiHttpRequest(
   let wroteRole = false;
   let sawAssistantDelta = false;
   let closed = false;
+  const toolStartTimes = new Map<string, number>();
 
   const unsubscribe = onAgentEvent((evt) => {
     if (evt.runId !== runId) {
       return;
     }
     if (closed) {
+      return;
+    }
+
+    if (evt.stream === "tool") {
+      const phase = evt.data?.phase as string | undefined;
+      const name = typeof evt.data?.name === "string" ? evt.data.name : undefined;
+      const toolCallId = typeof evt.data?.toolCallId === "string" ? evt.data.toolCallId : undefined;
+
+      if (phase === "start" && toolCallId) {
+        toolStartTimes.set(toolCallId, evt.ts);
+        writeSse(res, {
+          id: runId,
+          object: "chat.completion.chunk",
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [],
+          x_tool_event: { phase: "start", name, toolCallId, args: evt.data?.args ?? {}, ts: evt.ts },
+        });
+      } else if (phase === "result" && toolCallId) {
+        const startTs = toolStartTimes.get(toolCallId);
+        const duration = startTs ? evt.ts - startTs : undefined;
+        toolStartTimes.delete(toolCallId);
+        writeSse(res, {
+          id: runId,
+          object: "chat.completion.chunk",
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [],
+          x_tool_event: {
+            phase: "result",
+            name,
+            toolCallId,
+            result: typeof evt.data?.result === "string" ? evt.data.result : JSON.stringify(evt.data?.result ?? ""),
+            isError: Boolean(evt.data?.isError),
+            duration,
+            ts: evt.ts,
+          },
+        });
+      }
       return;
     }
 
