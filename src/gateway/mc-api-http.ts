@@ -7,6 +7,7 @@
  * All endpoints require Bearer-token authentication (same token as `/v1/chat/completions`).
  *
  * Endpoints:
+ *   POST /mc/v1/pairing/approve                    → approve a Telegram pairing code
  *   GET  /mc/v1/sessions?agentId=X               → list sessions (with optional filters)
  *   GET  /mc/v1/sessions/:key/messages?limit=200  → chat history for a session
  *   GET  /mc/v1/agents/:agentId/files             → list workspace files
@@ -30,7 +31,9 @@ import {
   DEFAULT_USER_FILENAME,
   isWorkspaceOnboardingCompleted,
 } from "../agents/workspace.js";
+import { notifyPairingApproved } from "../channels/plugins/pairing.js";
 import { loadConfig } from "../config/config.js";
+import { approveChannelPairingCode } from "../pairing/pairing-store.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -337,6 +340,49 @@ async function handlePutFile(
   });
 }
 
+// ── Route: POST /mc/v1/pairing/approve ─────────────────────────────────────
+
+async function handlePairingApprove(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const body = await readBody(req, 1024);
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    sendInvalidRequest(res, "Invalid JSON body");
+    return;
+  }
+
+  const rawChannel = parsed.channel;
+  const rawCode = parsed.code;
+  const channel = (typeof rawChannel === "string" ? rawChannel : "").trim().toLowerCase();
+  const code = (typeof rawCode === "string" ? rawCode : "").trim();
+
+  if (!channel) {
+    sendInvalidRequest(res, "Missing channel");
+    return;
+  }
+  if (!code || code.length < 4 || code.length > 64) {
+    sendInvalidRequest(res, "Invalid code");
+    return;
+  }
+
+  const approved = await approveChannelPairingCode({ channel, code });
+  if (!approved) {
+    sendJson(res, 404, { ok: false, error: "No pending pairing request found for that code" });
+    return;
+  }
+
+  // Notify the Telegram user that pairing succeeded (best-effort).
+  try {
+    const cfg = loadConfig();
+    await notifyPairingApproved({ channelId: channel, id: approved.id, cfg });
+  } catch {
+    // non-blocking
+  }
+
+  sendJson(res, 200, { ok: true, id: approved.id });
+}
+
 // ── Main handler ───────────────────────────────────────────────────────────
 
 /**
@@ -371,6 +417,12 @@ export async function handleMcApiHttpRequest(
   }
 
   const subPath = pathname.slice(MC_API_PREFIX.length);
+
+  // ── POST /mc/v1/pairing/approve ────────────────────────────────────────
+  if (subPath === "/pairing/approve" && req.method === "POST") {
+    await handlePairingApprove(req, res);
+    return true;
+  }
 
   // ── GET /mc/v1/sessions ──────────────────────────────────────────────
   if (subPath === "/sessions" && req.method === "GET") {
