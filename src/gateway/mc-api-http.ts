@@ -8,6 +8,8 @@
  *
  * Endpoints:
  *   POST /mc/v1/pairing/approve                    → approve a Telegram pairing code
+ *   GET  /mc/v1/crons?agentId=X                   → list cron jobs (optionally filtered by agent)
+ *   DELETE /mc/v1/crons/:id                        → delete a cron job
  *   GET  /mc/v1/sessions?agentId=X               → list sessions (with optional filters)
  *   GET  /mc/v1/sessions/:key/messages?limit=200  → chat history for a session
  *   GET  /mc/v1/agents/:agentId/files             → list workspace files
@@ -33,6 +35,7 @@ import {
 } from "../agents/workspace.js";
 import { notifyPairingApproved } from "../channels/plugins/pairing.js";
 import { loadConfig } from "../config/config.js";
+import { loadCronStore, resolveCronStorePath, saveCronStore } from "../cron/store.js";
 import { approveChannelPairingCode } from "../pairing/pairing-store.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -340,6 +343,48 @@ async function handlePutFile(
   });
 }
 
+// ── Route: GET /mc/v1/crons ─────────────────────────────────────────────────
+
+async function handleListCrons(
+  _req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+): Promise<void> {
+  const cfg = loadConfig();
+  const storePath = resolveCronStorePath(cfg.cron?.store);
+  const store = await loadCronStore(storePath);
+
+  const agentIdFilter = url.searchParams.get("agentId") || undefined;
+  let jobs = store.jobs;
+  if (agentIdFilter) {
+    jobs = jobs.filter((j) => j.agentId === agentIdFilter);
+  }
+
+  sendJson(res, 200, { jobs });
+}
+
+// ── Route: DELETE /mc/v1/crons/:id ──────────────────────────────────────────
+
+async function handleDeleteCron(
+  _req: IncomingMessage,
+  res: ServerResponse,
+  cronId: string,
+): Promise<void> {
+  const cfg = loadConfig();
+  const storePath = resolveCronStorePath(cfg.cron?.store);
+  const store = await loadCronStore(storePath);
+
+  const idx = store.jobs.findIndex((j) => j.id === cronId);
+  if (idx === -1) {
+    sendJson(res, 404, { ok: false, error: "Cron job not found" });
+    return;
+  }
+
+  store.jobs.splice(idx, 1);
+  await saveCronStore(storePath, store);
+  sendJson(res, 200, { ok: true, deleted: cronId });
+}
+
 // ── Route: POST /mc/v1/pairing/approve ─────────────────────────────────────
 
 async function handlePairingApprove(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -417,6 +462,20 @@ export async function handleMcApiHttpRequest(
   }
 
   const subPath = pathname.slice(MC_API_PREFIX.length);
+
+  // ── GET /mc/v1/crons ──────────────────────────────────────────────────
+  if (subPath === "/crons" && req.method === "GET") {
+    await handleListCrons(req, res, url);
+    return true;
+  }
+
+  // ── DELETE /mc/v1/crons/:id ──────────────────────────────────────────
+  const cronDeleteMatch = subPath.match(/^\/crons\/([^/]+)$/);
+  if (cronDeleteMatch && req.method === "DELETE") {
+    const cronId = decodeURIComponent(cronDeleteMatch[1]);
+    await handleDeleteCron(req, res, cronId);
+    return true;
+  }
 
   // ── POST /mc/v1/pairing/approve ────────────────────────────────────────
   if (subPath === "/pairing/approve" && req.method === "POST") {
