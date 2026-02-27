@@ -89,10 +89,7 @@ export function createOpenClawTools(options?: {
         requireExplicitTarget: options?.requireExplicitMessageTarget,
       });
   const tools: AnyAgentTool[] = [
-    createBrowserTool({
-      sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
-      allowHostControl: options?.allowHostBrowserControl,
-    }),
+    createBrowserTool(),
     createCanvasTool(),
     createNodesTool({
       agentSessionKey: options?.agentSessionKey,
