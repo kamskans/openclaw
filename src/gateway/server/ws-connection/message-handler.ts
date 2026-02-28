@@ -1,6 +1,11 @@
 import type { IncomingMessage } from "node:http";
-import os from "node:os";
 import type { WebSocket } from "ws";
+import os from "node:os";
+import type { createSubsystemLogger } from "../../../logging/subsystem.js";
+import type { AuthRateLimiter } from "../../auth-rate-limit.js";
+import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
+import type { GatewayWsClient } from "../ws-types.js";
 import { loadConfig } from "../../../config/config.js";
 import { verifyDeviceBootstrapToken } from "../../../infra/device-bootstrap.js";
 import {
@@ -20,12 +25,9 @@ import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../infra/skil
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { rawDataToString } from "../../../infra/ws.js";
-import type { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { isGatewayCliClient, isWebchatClient } from "../../../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
-import type { AuthRateLimiter } from "../../auth-rate-limit.js";
-import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { isLocalDirectRequest } from "../../auth.js";
 import {
   buildCanvasScopedHostUrl,
@@ -65,7 +67,6 @@ import {
   TICK_INTERVAL_MS,
 } from "../../server-constants.js";
 import { handleGatewayRequest } from "../../server-methods.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
 import { formatError } from "../../server-utils.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
@@ -76,7 +77,6 @@ import {
   incrementPresenceVersion,
   refreshGatewayHealthSnapshot,
 } from "../health-state.js";
-import type { GatewayWsClient } from "../ws-types.js";
 import { resolveConnectAuthDecision, resolveConnectAuthState } from "./auth-context.js";
 import { formatGatewayAuthFailureMessage } from "./auth-messages.js";
 import {
@@ -665,6 +665,24 @@ export function attachGatewayWsMessageHandler(params: {
         if (!authOk) {
           rejectUnauthorized(authResult);
           return;
+        }
+
+        // Security model:
+        // - Device-authenticated clients go through pairing + stored scopes.
+        // - Shared-secret (token/password/tailscale) connections are trusted and are typically
+        //   used by local operators (including the mission-control connector).
+        //
+        // If a client proves knowledge of the gateway shared secret and is not presenting a device
+        // identity, treat it as fully-admin to avoid getting stuck on scope-gated RPCs.
+        //
+        // This does not expand the network exposure; access is still bounded by the gateway bind
+        // policy (loopback by default) and the secrecy of the gateway token.
+        if (
+          !device &&
+          (authMethod === "token" || authMethod === "password" || authMethod === "tailscale")
+        ) {
+          scopes = ["operator.admin"];
+          connectParams.scopes = scopes;
         }
 
         const trustedProxyAuthOk = isTrustedProxyControlUiOperatorAuth({
