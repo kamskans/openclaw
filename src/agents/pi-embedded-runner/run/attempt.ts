@@ -1936,6 +1936,7 @@ export async function runEmbeddedAttempt(
         },
         params.thinkLevel,
         sessionAgentId,
+        process.env.OPENCLAW_TRACKING_USER || undefined,
       );
 
       if (cacheTrace) {

@@ -310,12 +310,62 @@ export async function handleOpenAiHttpRequest(
   let wroteRole = false;
   let sawAssistantDelta = false;
   let closed = false;
+  const toolStartTimes = new Map<string, number>();
 
   const unsubscribe = onAgentEvent((evt) => {
     if (evt.runId !== runId) {
       return;
     }
     if (closed) {
+      return;
+    }
+
+    // Forward tool events as x_tool_event fields in SSE chunks so the
+    // HQ frontend can render tool call pills and connect buttons.
+    if (evt.stream === "tool") {
+      const phase = evt.data?.phase as string | undefined;
+      const name = typeof evt.data?.name === "string" ? evt.data.name : undefined;
+      const tcId = typeof evt.data?.toolCallId === "string" ? evt.data.toolCallId : undefined;
+      if (phase === "start" && tcId) {
+        toolStartTimes.set(tcId, evt.ts);
+        writeSse(res, {
+          id: runId,
+          object: "chat.completion.chunk",
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [],
+          x_tool_event: {
+            phase: "start",
+            name,
+            toolCallId: tcId,
+            args: evt.data?.args || {},
+            ts: evt.ts,
+          },
+        });
+      } else if (phase === "result" && tcId) {
+        const startTs = toolStartTimes.get(tcId);
+        const duration = startTs ? evt.ts - startTs : undefined;
+        toolStartTimes.delete(tcId);
+        writeSse(res, {
+          id: runId,
+          object: "chat.completion.chunk",
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [],
+          x_tool_event: {
+            phase: "result",
+            name,
+            toolCallId: tcId,
+            result:
+              typeof evt.data?.result === "string"
+                ? evt.data.result
+                : JSON.stringify(evt.data?.result || ""),
+            isError: Boolean(evt.data?.isError),
+            duration,
+            ts: evt.ts,
+          },
+        });
+      }
       return;
     }
 

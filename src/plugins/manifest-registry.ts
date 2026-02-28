@@ -175,6 +175,38 @@ export function loadPluginManifestRegistry(params: {
     const rejectHardlinks = candidate.origin !== "bundled";
     const manifestRes = loadPluginManifest(candidate.rootDir, rejectHardlinks);
     if (!manifestRes.ok) {
+      // Allow manifest-less drop-in tool extensions under .openclaw/extensions/.
+      const isExtDir = /(^|[\\/])\.openclaw[\\/]extensions$/.test(
+        candidate.rootDir.replace(/\\/g, "/"),
+      );
+      const isDirectFile =
+        candidate.source &&
+        candidate.rootDir &&
+        candidate.source.startsWith(candidate.rootDir) &&
+        candidate.source !== candidate.rootDir;
+      const isMissingManifest = String(manifestRes.error || "").startsWith(
+        "plugin manifest not found:",
+      );
+      if (isExtDir && isDirectFile && candidate.idHint && isMissingManifest) {
+        const syntheticManifest: PluginManifest = {
+          id: candidate.idHint,
+          configSchema: { type: "object", additionalProperties: true, properties: {} },
+          channels: [],
+          providers: [],
+          skills: [],
+        };
+        const schemaCacheKey = `synthetic:${candidate.rootDir}:${candidate.idHint}`;
+        records.push(
+          buildRecord({
+            manifest: syntheticManifest,
+            candidate,
+            manifestPath: manifestRes.manifestPath,
+            schemaCacheKey,
+            configSchema: syntheticManifest.configSchema,
+          }),
+        );
+        continue;
+      }
       diagnostics.push({
         level: "error",
         message: manifestRes.error,

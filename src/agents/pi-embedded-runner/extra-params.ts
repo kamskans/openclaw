@@ -335,6 +335,7 @@ export function applyExtraParamsToAgent(
   extraParamsOverride?: Record<string, unknown>,
   thinkingLevel?: ThinkLevel,
   agentId?: string,
+  trackingUser?: string,
 ): void {
   const resolvedExtraParams = resolveExtraParams({
     cfg,
@@ -408,7 +409,7 @@ export function applyExtraParamsToAgent(
     // See: openclaw/openclaw#32039
     const skipReasoningInjection = modelId === "auto" || isProxyReasoningUnsupported(modelId);
     const openRouterThinkingLevel = skipReasoningInjection ? undefined : thinkingLevel;
-    agent.streamFn = createOpenRouterWrapper(agent.streamFn, openRouterThinkingLevel);
+    agent.streamFn = createOpenRouterWrapper(agent.streamFn, openRouterThinkingLevel, trackingUser);
     agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn);
   }
 

@@ -641,8 +641,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     return jitiLoader;
   };
 
-  const manifestByRoot = new Map(
-    manifestRegistry.plugins.map((record) => [record.rootDir, record]),
+  // Key by source (full file path) instead of rootDir to support manifestless
+  // drop-in extensions that share the same rootDir (.openclaw/extensions/).
+  const manifestBySource = new Map(
+    manifestRegistry.plugins.map((record) => [record.source, record]),
   );
 
   const seenIds = new Map<string, PluginRecord["origin"]>();
@@ -651,7 +653,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   let memorySlotMatched = false;
 
   for (const candidate of discovery.candidates) {
-    const manifestRecord = manifestByRoot.get(candidate.rootDir);
+    const manifestRecord = manifestBySource.get(candidate.source);
     if (!manifestRecord) {
       continue;
     }
