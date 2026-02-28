@@ -363,6 +363,55 @@ async function handleListCrons(
   sendJson(res, 200, { jobs });
 }
 
+// ── Route: PATCH /mc/v1/crons/:id ───────────────────────────────────────────
+
+async function handleUpdateCron(
+  req: IncomingMessage,
+  res: ServerResponse,
+  cronId: string,
+): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    const raw = await readBody(req, MAX_BODY_BYTES);
+    body = JSON.parse(raw) as Record<string, unknown>;
+  } catch (err: unknown) {
+    if (err instanceof Error && err.message === "payload too large") {
+      sendJson(res, 413, {
+        error: { message: "Payload too large", type: "invalid_request_error" },
+      });
+    } else {
+      sendInvalidRequest(res, "Invalid JSON body");
+    }
+    return;
+  }
+
+  const cfg = loadConfig();
+  const storePath = resolveCronStorePath(cfg.cron?.store);
+  const store = await loadCronStore(storePath);
+
+  const idx = store.jobs.findIndex((j) => j.id === cronId);
+  if (idx === -1) {
+    sendJson(res, 404, { ok: false, error: "Cron job not found" });
+    return;
+  }
+
+  const schedule = body.schedule as Record<string, unknown> | undefined;
+  if (schedule) {
+    const job = store.jobs[idx];
+    if (typeof schedule.expr === "string") {
+      (job.schedule as any).expr = schedule.expr;
+      (job.schedule as any).kind = "cron";
+    }
+    if (typeof schedule.tz === "string") {
+      (job.schedule as any).tz = schedule.tz;
+    }
+    job.updatedAtMs = Date.now();
+  }
+
+  await saveCronStore(storePath, store);
+  sendJson(res, 200, { ok: true, job: store.jobs[idx] });
+}
+
 // ── Route: DELETE /mc/v1/crons/:id ──────────────────────────────────────────
 
 async function handleDeleteCron(
@@ -469,11 +518,16 @@ export async function handleMcApiHttpRequest(
     return true;
   }
 
-  // ── DELETE /mc/v1/crons/:id ──────────────────────────────────────────
-  const cronDeleteMatch = subPath.match(/^\/crons\/([^/]+)$/);
-  if (cronDeleteMatch && req.method === "DELETE") {
-    const cronId = decodeURIComponent(cronDeleteMatch[1]);
+  // ── DELETE|PATCH /mc/v1/crons/:id ────────────────────────────────────
+  const cronIdMatch = subPath.match(/^\/crons\/([^/]+)$/);
+  if (cronIdMatch && req.method === "DELETE") {
+    const cronId = decodeURIComponent(cronIdMatch[1]);
     await handleDeleteCron(req, res, cronId);
+    return true;
+  }
+  if (cronIdMatch && req.method === "PATCH") {
+    const cronId = decodeURIComponent(cronIdMatch[1]);
+    await handleUpdateCron(req, res, cronId);
     return true;
   }
 
