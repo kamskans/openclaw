@@ -405,6 +405,8 @@ async function handleUpdateCron(
     if (typeof schedule.tz === "string") {
       (job.schedule as any).tz = schedule.tz;
     }
+    // Clear cached next-run so the cron runner recalculates from the new schedule.
+    delete (job.state as any).nextRunAtMs;
     job.updatedAtMs = Date.now();
   }
 
