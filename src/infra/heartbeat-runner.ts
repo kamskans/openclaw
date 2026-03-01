@@ -576,7 +576,7 @@ After completing all due tasks, reply HEARTBEAT_OK.`;
   const basePrompt = hasExecCompletion
     ? buildExecEventPrompt({ deliverToUser: params.canRelayToUser })
     : hasCronEvents
-      ? buildCronEventPrompt(cronEvents, { deliverToUser: params.canRelayToUser })
+      ? buildCronEventPrompt(cronEvents, { deliverToUser: true })
       : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
   const prompt = appendHeartbeatWorkspacePathHint(basePrompt, params.workspaceDir);
 
