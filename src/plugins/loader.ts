@@ -643,6 +643,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
   // Key by source (full file path) instead of rootDir to support manifestless
   // drop-in extensions that share the same rootDir (.openclaw/extensions/).
+  // Using rootDir alone would collapse all flat-file extensions into one Map entry.
   const manifestBySource = new Map(
     manifestRegistry.plugins.map((record) => [record.source, record]),
   );
