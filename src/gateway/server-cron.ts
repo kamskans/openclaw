@@ -291,7 +291,7 @@ export function buildGatewayCronService(params: {
         message,
         abortSignal,
         agentId,
-        sessionKey: `cron:${job.id}`,
+        sessionKey: job.sessionKey || `cron:${job.id}`,
         lane: "cron",
       });
     },
