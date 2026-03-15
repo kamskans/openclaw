@@ -409,7 +409,7 @@ export function applyExtraParamsToAgent(
     // See: openclaw/openclaw#32039
     const skipReasoningInjection = modelId === "auto" || isProxyReasoningUnsupported(modelId);
     const openRouterThinkingLevel = skipReasoningInjection ? undefined : thinkingLevel;
-    agent.streamFn = createOpenRouterWrapper(agent.streamFn, openRouterThinkingLevel, trackingUser);
+    agent.streamFn = createOpenRouterWrapper(agent.streamFn, openRouterThinkingLevel);
     agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn);
   }
 
