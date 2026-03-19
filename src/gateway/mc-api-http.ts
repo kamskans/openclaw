@@ -64,7 +64,9 @@ const BOOTSTRAP_FILE_NAMES = [
 ] as const;
 
 const MEMORY_FILE_NAMES = [DEFAULT_MEMORY_FILENAME, DEFAULT_MEMORY_ALT_FILENAME] as const;
-const ALLOWED_FILE_NAMES = new Set<string>([...BOOTSTRAP_FILE_NAMES, ...MEMORY_FILE_NAMES]);
+// Extra workspace docs that agents (e.g. Ada) write as project briefs.
+const EXTRA_FILE_NAMES = ["WEBSITE.md"] as const;
+const ALLOWED_FILE_NAMES = new Set<string>([...BOOTSTRAP_FILE_NAMES, ...MEMORY_FILE_NAMES, ...EXTRA_FILE_NAMES]);
 
 const MAX_BODY_BYTES = 512 * 1024; // 512 KB for file writes
 
