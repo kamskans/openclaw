@@ -403,6 +403,10 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
                   ...delivery,
                   ...inferred,
                 } satisfies CronDelivery;
+              } else {
+                // Web/HQ sessions have no channel peer — announce would fail at runtime
+                // with "Channel is required". Fall back to no-delivery so the cron runs silently.
+                (job as { delivery?: unknown }).delivery = { mode: "none" };
               }
             }
           }
