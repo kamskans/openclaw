@@ -492,7 +492,7 @@ CRITICAL CONSTRAINTS:
 - sessionTarget="main" REQUIRES payload.kind="systemEvent"
 - sessionTarget="isolated" | "current" | "session:xxx" REQUIRES payload.kind="agentTurn"
 - For webhook callbacks, use delivery.mode="webhook" with delivery.to set to a URL.
-Default: prefer isolated agentTurn jobs unless the user explicitly wants current-session binding.
+Default: prefer sessionTarget="main" + payload.kind="systemEvent" so results appear in the agent's chat. Use isolated agentTurn only when the job must run completely independently with no chat output.
 
 WAKE MODES (for wake action):
 - "next-heartbeat" (default): Wake on next heartbeat
@@ -623,6 +623,19 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
                 (job as { delivery?: unknown }).delivery = { mode: "none" };
               }
             }
+          }
+
+          // Auto-inject sessionKey for main-session crons so output appears in the user's
+          // chat. Agents creating crons from HQ can't know their own session key, so we
+          // fill it in from the current request context when not already set.
+          if (
+            opts?.agentSessionKey &&
+            job &&
+            typeof job === "object" &&
+            (job as { sessionTarget?: string }).sessionTarget === "main" &&
+            !(job as { sessionKey?: string }).sessionKey
+          ) {
+            (job as { sessionKey?: string }).sessionKey = opts.agentSessionKey;
           }
 
           const contextMessages =
