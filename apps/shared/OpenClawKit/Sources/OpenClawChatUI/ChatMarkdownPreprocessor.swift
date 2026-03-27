@@ -56,9 +56,10 @@ enum ChatMarkdownPreprocessor {
         let withoutMessageIdHints = self.stripMessageIdHints(withoutEnvelope)
         let withoutContextBlocks = self.stripInboundContextBlocks(withoutMessageIdHints)
         let withoutTimestamps = self.stripPrefixedTimestamps(withoutContextBlocks)
+        let withoutHtmlJunk = self.stripHtmlJunk(withoutTimestamps)
 
-        let socialPosts = self.extractSocialPosts(withoutTimestamps)
-        let withoutSocialFences = socialPosts.isEmpty ? withoutTimestamps : self.stripSocialPostFences(withoutTimestamps)
+        let socialPosts = self.extractSocialPosts(withoutHtmlJunk)
+        let withoutSocialFences = socialPosts.isEmpty ? withoutHtmlJunk : self.stripSocialPostFences(withoutHtmlJunk)
 
         guard let re = try? NSRegularExpression(pattern: self.markdownImagePattern) else {
             return Result(cleaned: self.normalize(withoutSocialFences), images: [], socialPosts: socialPosts)
@@ -143,6 +144,20 @@ enum ChatMarkdownPreprocessor {
     private static func stripSocialPostFences(_ raw: String) -> String {
         let pattern = #"```social-posts\n[\s\S]*?```"#
         return raw.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
+    }
+
+    /// Remove raw SVG/HTML blobs that sometimes leak from tool results into assistant messages.
+    private static func stripHtmlJunk(_ raw: String) -> String {
+        var out = raw
+        // IE conditional comments: <!--[if ...]>...</![endif]-->
+        out = out.replacingOccurrences(
+            of: #"<!--\[if[^\]]*\]>[\s\S]*?<!\[endif\]-->"#,
+            with: "", options: [.regularExpression, .caseInsensitive])
+        // SVG blocks
+        out = out.replacingOccurrences(
+            of: #"<svg[\s\S]*?<\/svg>"#,
+            with: "", options: [.regularExpression, .caseInsensitive])
+        return out.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func stripEnvelope(_ raw: String) -> String {
