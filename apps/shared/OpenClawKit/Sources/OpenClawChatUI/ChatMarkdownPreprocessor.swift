@@ -39,9 +39,16 @@ enum ChatMarkdownPreprocessor {
         let image: OpenClawPlatformImage?
     }
 
+    struct SocialPost: Identifiable {
+        let id = UUID()
+        let platform: String
+        let content: String
+    }
+
     struct Result {
         let cleaned: String
         let images: [InlineImage]
+        let socialPosts: [SocialPost]
     }
 
     static func preprocess(markdown raw: String) -> Result {
@@ -49,18 +56,22 @@ enum ChatMarkdownPreprocessor {
         let withoutMessageIdHints = self.stripMessageIdHints(withoutEnvelope)
         let withoutContextBlocks = self.stripInboundContextBlocks(withoutMessageIdHints)
         let withoutTimestamps = self.stripPrefixedTimestamps(withoutContextBlocks)
+
+        let socialPosts = self.extractSocialPosts(withoutTimestamps)
+        let withoutSocialFences = socialPosts.isEmpty ? withoutTimestamps : self.stripSocialPostFences(withoutTimestamps)
+
         guard let re = try? NSRegularExpression(pattern: self.markdownImagePattern) else {
-            return Result(cleaned: self.normalize(withoutTimestamps), images: [])
+            return Result(cleaned: self.normalize(withoutSocialFences), images: [], socialPosts: socialPosts)
         }
 
-        let ns = withoutTimestamps as NSString
+        let ns = withoutSocialFences as NSString
         let matches = re.matches(
-            in: withoutTimestamps,
+            in: withoutSocialFences,
             range: NSRange(location: 0, length: ns.length))
-        if matches.isEmpty { return Result(cleaned: self.normalize(withoutTimestamps), images: []) }
+        if matches.isEmpty { return Result(cleaned: self.normalize(withoutSocialFences), images: [], socialPosts: socialPosts) }
 
         var images: [InlineImage] = []
-        let cleaned = NSMutableString(string: withoutTimestamps)
+        let cleaned = NSMutableString(string: withoutSocialFences)
 
         for match in matches.reversed() {
             guard match.numberOfRanges >= 3 else { continue }
@@ -75,7 +86,7 @@ enum ChatMarkdownPreprocessor {
             }
         }
 
-        return Result(cleaned: self.normalize(cleaned as String), images: images.reversed())
+        return Result(cleaned: self.normalize(cleaned as String), images: images.reversed(), socialPosts: socialPosts)
     }
 
     private static func inlineImage(label: String, source: String) -> InlineImage? {
@@ -96,6 +107,42 @@ enum ChatMarkdownPreprocessor {
     private static func fallbackImageLabel(_ label: String) -> String {
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "image" : trimmed
+    }
+
+    private static func extractSocialPosts(_ raw: String) -> [SocialPost] {
+        guard raw.contains("```social-posts") else { return [] }
+        var posts: [SocialPost] = []
+        let lines = raw.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
+        var i = 0
+        while i < lines.count {
+            let trimmed = lines[i].trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed == "```social-posts" {
+                i += 1
+                var jsonLines: [String] = []
+                while i < lines.count && lines[i].trimmingCharacters(in: .whitespacesAndNewlines) != "```" {
+                    jsonLines.append(lines[i])
+                    i += 1
+                }
+                let json = jsonLines.joined(separator: "\n")
+                if let data = json.data(using: .utf8),
+                   let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                    for item in arr {
+                        let platform = item["platform"] as? String ?? ""
+                        let content = item["content"] as? String ?? ""
+                        if !content.isEmpty {
+                            posts.append(SocialPost(platform: platform, content: content))
+                        }
+                    }
+                }
+            }
+            i += 1
+        }
+        return posts
+    }
+
+    private static func stripSocialPostFences(_ raw: String) -> String {
+        let pattern = #"```social-posts\n[\s\S]*?```"#
+        return raw.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
     }
 
     private static func stripEnvelope(_ raw: String) -> String {

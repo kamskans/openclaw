@@ -619,7 +619,8 @@ private struct ChatAssistantTextBody: View {
     let includesThinking: Bool
 
     var body: some View {
-        let segments = AssistantTextParser.segments(from: self.text, includeThinking: self.includesThinking)
+        let preprocessed = ChatMarkdownPreprocessor.preprocess(markdown: self.text)
+        let segments = AssistantTextParser.segments(from: preprocessed.cleaned, includeThinking: self.includesThinking)
         VStack(alignment: .leading, spacing: 10) {
             ForEach(segments) { segment in
                 let font = segment.kind == .thinking ? Font.system(size: 14).italic() : Font.system(size: 14)
@@ -630,6 +631,87 @@ private struct ChatAssistantTextBody: View {
                     font: font,
                     textColor: OpenClawChatTheme.assistantText)
             }
+            if !preprocessed.socialPosts.isEmpty {
+                SocialPostCardsView(posts: preprocessed.socialPosts)
+            }
+            if !preprocessed.images.isEmpty {
+                ForEach(preprocessed.images) { img in
+                    if let image = img.image {
+                        OpenClawPlatformImageFactory.image(image)
+                            .resizable()
+                            .scaledToFit()
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                }
+            }
         }
+    }
+}
+
+private struct SocialPostCardsView: View {
+    let posts: [ChatMarkdownPreprocessor.SocialPost]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(posts) { post in
+                SocialPostCard(post: post)
+            }
+        }
+    }
+}
+
+private struct SocialPostCard: View {
+    let post: ChatMarkdownPreprocessor.SocialPost
+    @State private var copied = false
+
+    private var platformColor: Color {
+        switch post.platform.lowercased() {
+        case "twitter", "x": return Color(red: 0.11, green: 0.63, blue: 0.95)
+        case "linkedin": return Color(red: 0.00, green: 0.47, blue: 0.71)
+        case "instagram": return Color(red: 0.83, green: 0.22, blue: 0.45)
+        case "facebook": return Color(red: 0.23, green: 0.35, blue: 0.60)
+        case "tiktok": return Color(red: 0.01, green: 0.80, blue: 0.67)
+        default: return Color.secondary
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(self.platformColor)
+                    .frame(width: 8, height: 8)
+                Text(self.post.platform.isEmpty ? "Post" : self.post.platform)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(self.platformColor)
+                Spacer(minLength: 0)
+                Button {
+                    #if canImport(UIKit)
+                    UIPasteboard.general.string = self.post.content
+                    #elseif canImport(AppKit)
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(self.post.content, forType: .string)
+                    #endif
+                    self.copied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.copied = false }
+                } label: {
+                    Text(self.copied ? "Copied" : "Copy")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            Text(self.post.content)
+                .font(.system(size: 13))
+                .foregroundStyle(OpenClawChatTheme.assistantText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white.opacity(0.06))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(self.platformColor.opacity(0.25), lineWidth: 1)))
     }
 }
