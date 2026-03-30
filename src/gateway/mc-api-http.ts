@@ -64,9 +64,10 @@ const BOOTSTRAP_FILE_NAMES = [
 ] as const;
 
 const MEMORY_FILE_NAMES = [DEFAULT_MEMORY_FILENAME, DEFAULT_MEMORY_ALT_FILENAME] as const;
-// Extra workspace docs that agents (e.g. Ada) write as project briefs.
-const EXTRA_FILE_NAMES = ["WEBSITE.md"] as const;
-const ALLOWED_FILE_NAMES = new Set<string>([...BOOTSTRAP_FILE_NAMES, ...MEMORY_FILE_NAMES, ...EXTRA_FILE_NAMES]);
+const ALLOWED_FILE_NAMES = new Set<string>([...BOOTSTRAP_FILE_NAMES, ...MEMORY_FILE_NAMES]);
+function isAllowedFileName(name: string): boolean {
+  return ALLOWED_FILE_NAMES.has(name) || name.endsWith(".md");
+}
 
 const MAX_BODY_BYTES = 512 * 1024; // 512 KB for file writes
 
@@ -247,6 +248,22 @@ async function handleListFiles(
     }
   }
 
+  // Extra .md files in the workspace not in the known list (e.g. CREATIVE.md, WEBSITE.md)
+  try {
+    const listedNames = new Set(files.map((f) => f.name));
+    const dirEntries = await fsPromises.readdir(workspaceDir);
+    for (const entry of dirEntries) {
+      if (!entry.endsWith(".md") || listedNames.has(entry)) continue;
+      const filePath = path.join(workspaceDir, entry);
+      const meta = await statFile(filePath);
+      if (meta) {
+        files.push({ name: entry, path: filePath, missing: false, size: meta.size, updatedAtMs: meta.updatedAtMs });
+      }
+    }
+  } catch {
+    // workspace dir may not exist yet — ignore
+  }
+
   sendJson(res, 200, { agentId, workspace: workspaceDir, files });
 }
 
@@ -258,7 +275,7 @@ async function handleGetFile(
   agentId: string,
   fileName: string,
 ): Promise<void> {
-  if (!ALLOWED_FILE_NAMES.has(fileName)) {
+  if (!isAllowedFileName(fileName)) {
     sendInvalidRequest(res, `unsupported file "${fileName}"`);
     return;
   }
@@ -300,7 +317,7 @@ async function handlePutFile(
   agentId: string,
   fileName: string,
 ): Promise<void> {
-  if (!ALLOWED_FILE_NAMES.has(fileName)) {
+  if (!isAllowedFileName(fileName)) {
     sendInvalidRequest(res, `unsupported file "${fileName}"`);
     return;
   }
