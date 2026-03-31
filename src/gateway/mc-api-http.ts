@@ -433,6 +433,47 @@ async function handleUpdateCron(
   sendJson(res, 200, { ok: true, job: store.jobs[idx] });
 }
 
+// ── Route: PUT /mc/v1/system/timezone ────────────────────────────────────────
+
+async function handleSetTimezone(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    const raw = await readBody(req, MAX_BODY_BYTES);
+    body = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    sendInvalidRequest(res, "Invalid JSON body");
+    return;
+  }
+
+  const tz = typeof body.timezone === "string" ? body.timezone.trim() : "";
+  if (!tz) {
+    sendInvalidRequest(res, "Missing required field: timezone");
+    return;
+  }
+
+  // Patch all existing cron jobs to the new timezone.
+  const cfg = loadConfig();
+  const storePath = resolveCronStorePath(cfg.cron?.store);
+  const store = await loadCronStore(storePath);
+  let updated = 0;
+  for (const job of store.jobs) {
+    if (job.schedule && (job.schedule as any).tz !== tz) {
+      (job.schedule as any).tz = tz;
+      delete (job.state as any).nextRunAtMs;
+      job.updatedAtMs = Date.now();
+      updated++;
+    }
+  }
+  if (updated > 0) {
+    await saveCronStore(storePath, store);
+  }
+
+  sendJson(res, 200, { ok: true, updated, timezone: tz });
+}
+
 // ── Route: DELETE /mc/v1/crons/:id ──────────────────────────────────────────
 
 async function handleDeleteCron(
@@ -549,6 +590,12 @@ export async function handleMcApiHttpRequest(
   if (cronIdMatch && req.method === "PATCH") {
     const cronId = decodeURIComponent(cronIdMatch[1]);
     await handleUpdateCron(req, res, cronId);
+    return true;
+  }
+
+  // ── PUT /mc/v1/system/timezone ────────────────────────────────────────
+  if (subPath === "/system/timezone" && req.method === "PUT") {
+    await handleSetTimezone(req, res);
     return true;
   }
 
