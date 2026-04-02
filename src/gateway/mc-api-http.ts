@@ -15,6 +15,8 @@
  *   GET  /mc/v1/agents/:agentId/files             → list workspace files
  *   GET  /mc/v1/agents/:agentId/files/:name        → read a workspace file
  *   PUT  /mc/v1/agents/:agentId/files/:name        → write a workspace file
+ *   GET  /mc/v1/browser/linkedin-cookies           → extract LinkedIn cookies via CDP
+ *   POST /mc/v1/browser/navigate                   → navigate Chromium to a URL via CDP
  */
 
 import fsPromises from "node:fs/promises";
@@ -496,6 +498,129 @@ async function handleDeleteCron(
   sendJson(res, 200, { ok: true, deleted: cronId });
 }
 
+// ── Route: GET /mc/v1/browser/linkedin-cookies ──────────────────────────────
+
+const CDP_HOST = "127.0.0.1";
+const CDP_PORT = 9222;
+
+/** Fetch the first available CDP WebSocket debugger URL. */
+async function getCdpDebuggerUrl(): Promise<string | null> {
+  try {
+    const res = await fetch(`http://${CDP_HOST}:${CDP_PORT}/json`);
+    if (!res.ok) return null;
+    const targets = (await res.json()) as Array<{ webSocketDebuggerUrl?: string; type?: string }>;
+    const page = targets.find((t) => t.type === "page" && t.webSocketDebuggerUrl);
+    return page?.webSocketDebuggerUrl ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Send a CDP command over a WebSocket and wait for the matching response. */
+function cdpCommand(
+  ws: any,
+  id: number,
+  method: string,
+  params: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error(`CDP command ${method} timed out`));
+    }, 10000);
+
+    ws.addEventListener("message", function handler(ev: { data: string }) {
+      try {
+        const msg = JSON.parse(ev.data) as { id?: number; result?: unknown; error?: unknown };
+        if (msg.id !== id) return;
+        ws.removeEventListener("message", handler);
+        clearTimeout(timeout);
+        if (msg.error) {
+          reject(new Error(JSON.stringify(msg.error)));
+        } else {
+          resolve((msg.result ?? {}) as Record<string, unknown>);
+        }
+      } catch {
+        // ignore non-JSON frames
+      }
+    });
+
+    ws.send(JSON.stringify({ id, method, params }));
+  });
+}
+
+/** Open a CDP WebSocket, run a command, then close it. */
+async function withCdp<T>(
+  debuggerUrl: string,
+  fn: (ws: any) => Promise<T>,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const WS = (globalThis as any).WebSocket as typeof WebSocket | undefined;
+    if (!WS) {
+      reject(new Error("WebSocket not available in this Node version"));
+      return;
+    }
+    const ws = new WS(debuggerUrl);
+    ws.addEventListener("error", (ev: any) => reject(new Error(String(ev?.message || "WebSocket error"))));
+    ws.addEventListener("open", () => {
+      fn(ws).then(resolve, reject).finally(() => {
+        try { (ws as any).close(); } catch { /* ignore */ }
+      });
+    });
+  });
+}
+
+async function handleGetLinkedInCookies(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const debuggerUrl = await getCdpDebuggerUrl();
+  if (!debuggerUrl) {
+    sendJson(res, 503, { ok: false, error: "Chromium CDP not available" });
+    return;
+  }
+
+  try {
+    const result = await withCdp(debuggerUrl, (ws) =>
+      cdpCommand(ws, 1, "Network.getCookies", { urls: ["https://www.linkedin.com"] }),
+    );
+    const cookies = (result.cookies ?? []) as Array<{ name: string; value: string; domain: string }>;
+    const liAt = cookies.find((c) => c.name === "li_at")?.value ?? null;
+    const jsessionId = cookies.find((c) => c.name === "JSESSIONID")?.value ?? null;
+    sendJson(res, 200, { ok: true, liAt, jsessionId, cookies });
+  } catch (err: unknown) {
+    sendJson(res, 500, { ok: false, error: String(err) });
+  }
+}
+
+// ── Route: POST /mc/v1/browser/navigate ─────────────────────────────────────
+
+async function handleBrowserNavigate(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    const raw = await readBody(req, 4096);
+    body = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    sendInvalidRequest(res, "Invalid JSON body");
+    return;
+  }
+
+  const url = typeof body.url === "string" ? body.url.trim() : "";
+  if (!url) {
+    sendInvalidRequest(res, "Missing required field: url");
+    return;
+  }
+
+  const debuggerUrl = await getCdpDebuggerUrl();
+  if (!debuggerUrl) {
+    sendJson(res, 503, { ok: false, error: "Chromium CDP not available" });
+    return;
+  }
+
+  try {
+    await withCdp(debuggerUrl, (ws) => cdpCommand(ws, 1, "Page.navigate", { url }));
+    sendJson(res, 200, { ok: true, url });
+  } catch (err: unknown) {
+    sendJson(res, 500, { ok: false, error: String(err) });
+  }
+}
+
 // ── Route: POST /mc/v1/pairing/approve ─────────────────────────────────────
 
 async function handlePairingApprove(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -628,6 +753,18 @@ export async function handleMcApiHttpRequest(
       return true;
     }
     await handleListFiles(req, res, agentId);
+    return true;
+  }
+
+  // ── GET /mc/v1/browser/linkedin-cookies ──────────────────────────────
+  if (subPath === "/browser/linkedin-cookies" && req.method === "GET") {
+    await handleGetLinkedInCookies(req, res);
+    return true;
+  }
+
+  // ── POST /mc/v1/browser/navigate ─────────────────────────────────────
+  if (subPath === "/browser/navigate" && req.method === "POST") {
+    await handleBrowserNavigate(req, res);
     return true;
   }
 
