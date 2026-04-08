@@ -63,6 +63,7 @@ import {
   getBearerToken,
   resolveHttpBrowserOriginPolicy,
 } from "./http-utils.js";
+import { handleMcApiHttpRequest } from "./mc-api-http.js";
 import { handleOpenAiModelsHttpRequest } from "./models-http.js";
 import { resolveRequestClientIp } from "./net.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
@@ -858,6 +859,15 @@ export function createGatewayHttpServer(opts: {
               auth: resolvedAuth,
               trustedProxies,
               allowRealIpFallback,
+              rateLimiter,
+            }),
+        },
+        {
+          name: "mc-api",
+          run: () =>
+            handleMcApiHttpRequest(req, res, {
+              auth: resolvedAuth,
+              trustedProxies,
               rateLimiter,
             }),
         },
