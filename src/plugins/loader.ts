@@ -1247,6 +1247,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const manifestByRoot = new Map(
       manifestRegistry.plugins.map((record) => [record.rootDir, record]),
     );
+    // Also key by source for manifestless drop-in extensions (same fix as main loader path).
+    const manifestBySource = new Map(
+      manifestRegistry.plugins.map((record) => [record.source, record]),
+    );
     const orderedCandidates = [...discovery.candidates].toSorted((left, right) => {
       return compareDuplicateCandidateOrder({
         left,
@@ -1263,7 +1267,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     let memorySlotMatched = false;
 
     for (const candidate of orderedCandidates) {
-      const manifestRecord = manifestByRoot.get(candidate.rootDir);
+      const manifestRecord = manifestBySource.get(candidate.source) ?? manifestByRoot.get(candidate.rootDir);
       if (!manifestRecord) {
         continue;
       }
