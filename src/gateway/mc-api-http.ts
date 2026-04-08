@@ -42,7 +42,7 @@ import { approveChannelPairingCode } from "../pairing/pairing-store.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { authorizeGatewayBearerRequestOrReply } from "./http-auth-helpers.js";
+import { authorizeGatewayHttpRequestOrReply } from "./http-utils.js";
 import { sendJson, sendInvalidRequest, sendMethodNotAllowed } from "./http-common.js";
 import {
   listSessionsFromStore,
@@ -686,7 +686,7 @@ export async function handleMcApiHttpRequest(
   }
 
   // Authenticate
-  const authorized = await authorizeGatewayBearerRequestOrReply({
+  const authorized = await authorizeGatewayHttpRequestOrReply({
     req,
     res,
     auth: opts.auth,
