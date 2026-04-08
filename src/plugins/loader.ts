@@ -906,11 +906,11 @@ function matchesExplicitInstallRule(params: {
 
 function resolveCandidateDuplicateRank(params: {
   candidate: ReturnType<typeof discoverOpenClawPlugins>["candidates"][number];
-  manifestByRoot: Map<string, ReturnType<typeof loadPluginManifestRegistry>["plugins"][number]>;
+  manifestBySource: Map<string, ReturnType<typeof loadPluginManifestRegistry>["plugins"][number]>;
   provenance: PluginProvenanceIndex;
   env: NodeJS.ProcessEnv;
 }): number {
-  const manifestRecord = params.manifestByRoot.get(params.candidate.rootDir);
+  const manifestRecord = params.manifestBySource.get(params.candidate.source);
   const pluginId = manifestRecord?.id;
   const isExplicitInstall =
     params.candidate.origin === "global" &&
@@ -941,25 +941,25 @@ function resolveCandidateDuplicateRank(params: {
 function compareDuplicateCandidateOrder(params: {
   left: ReturnType<typeof discoverOpenClawPlugins>["candidates"][number];
   right: ReturnType<typeof discoverOpenClawPlugins>["candidates"][number];
-  manifestByRoot: Map<string, ReturnType<typeof loadPluginManifestRegistry>["plugins"][number]>;
+  manifestBySource: Map<string, ReturnType<typeof loadPluginManifestRegistry>["plugins"][number]>;
   provenance: PluginProvenanceIndex;
   env: NodeJS.ProcessEnv;
 }): number {
-  const leftPluginId = params.manifestByRoot.get(params.left.rootDir)?.id;
-  const rightPluginId = params.manifestByRoot.get(params.right.rootDir)?.id;
+  const leftPluginId = params.manifestBySource.get(params.left.source)?.id;
+  const rightPluginId = params.manifestBySource.get(params.right.source)?.id;
   if (!leftPluginId || leftPluginId !== rightPluginId) {
     return 0;
   }
   return (
     resolveCandidateDuplicateRank({
       candidate: params.left,
-      manifestByRoot: params.manifestByRoot,
+      manifestBySource: params.manifestBySource,
       provenance: params.provenance,
       env: params.env,
     }) -
     resolveCandidateDuplicateRank({
       candidate: params.right,
-      manifestByRoot: params.manifestByRoot,
+      manifestBySource: params.manifestBySource,
       provenance: params.provenance,
       env: params.env,
     })
@@ -1244,10 +1244,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       env,
     });
 
-    const manifestByRoot = new Map(
-      manifestRegistry.plugins.map((record) => [record.rootDir, record]),
-    );
-    // Also key by source for manifestless drop-in extensions (same fix as main loader path).
+    // Key by source (full file path) instead of rootDir so manifestless drop-in
+    // extensions that share the same rootDir (.openclaw/extensions/) each get their
+    // own Map entry instead of collapsing into one.
     const manifestBySource = new Map(
       manifestRegistry.plugins.map((record) => [record.source, record]),
     );
@@ -1255,7 +1254,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       return compareDuplicateCandidateOrder({
         left,
         right,
-        manifestByRoot,
+        manifestBySource,
         provenance,
         env,
       });
@@ -1267,7 +1266,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     let memorySlotMatched = false;
 
     for (const candidate of orderedCandidates) {
-      const manifestRecord = manifestBySource.get(candidate.source) ?? manifestByRoot.get(candidate.rootDir);
+      const manifestRecord = manifestBySource.get(candidate.source);
       if (!manifestRecord) {
         continue;
       }
@@ -1842,12 +1841,7 @@ export async function loadOpenClawPluginCliRegistry(
     normalizedLoadPaths: normalized.loadPaths,
     env,
   });
-  const manifestByRoot = new Map(
-    manifestRegistry.plugins.map((record) => [record.rootDir, record]),
-  );
-  // Also key by source (full file path) for manifestless drop-in extensions
-  // that share the same rootDir (.openclaw/extensions/). Using rootDir alone
-  // would collapse all flat-file extensions into one Map entry.
+  // Key by source (full file path) — same rationale as the validate-mode path above.
   const manifestBySource = new Map(
     manifestRegistry.plugins.map((record) => [record.source, record]),
   );
@@ -1855,7 +1849,7 @@ export async function loadOpenClawPluginCliRegistry(
     return compareDuplicateCandidateOrder({
       left,
       right,
-      manifestByRoot,
+      manifestBySource,
       provenance,
       env,
     });
@@ -1866,7 +1860,7 @@ export async function loadOpenClawPluginCliRegistry(
   let selectedMemoryPluginId: string | null = null;
 
   for (const candidate of orderedCandidates) {
-    const manifestRecord = manifestBySource.get(candidate.source) ?? manifestByRoot.get(candidate.rootDir);
+    const manifestRecord = manifestBySource.get(candidate.source);
     if (!manifestRecord) {
       continue;
     }
