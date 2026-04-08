@@ -745,6 +745,18 @@ export function attachGatewayWsMessageHandler(params: {
         let boundBootstrapProfile: DeviceBootstrapProfile | null = null;
         let handoffBootstrapProfile: DeviceBootstrapProfile | null = null;
 
+        // MC: Auto-elevate shared-secret (token/password/tailscale) connections without
+        // device identity to operator.admin scope. Prevents scope-gated RPC failures for
+        // headless/connector clients. Does not expand network exposure — access is bounded
+        // by gateway bind policy and the secrecy of the gateway token.
+        if (
+          !device &&
+          (authMethod === "token" || authMethod === "password" || authMethod === "tailscale")
+        ) {
+          scopes = ["operator.admin"];
+          connectParams.scopes = scopes;
+        }
+
         const trustedProxyAuthOk = isTrustedProxyControlUiOperatorAuth({
           isControlUi,
           role,

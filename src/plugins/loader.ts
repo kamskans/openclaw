@@ -1841,6 +1841,12 @@ export async function loadOpenClawPluginCliRegistry(
   const manifestByRoot = new Map(
     manifestRegistry.plugins.map((record) => [record.rootDir, record]),
   );
+  // Also key by source (full file path) for manifestless drop-in extensions
+  // that share the same rootDir (.openclaw/extensions/). Using rootDir alone
+  // would collapse all flat-file extensions into one Map entry.
+  const manifestBySource = new Map(
+    manifestRegistry.plugins.map((record) => [record.source, record]),
+  );
   const orderedCandidates = [...discovery.candidates].toSorted((left, right) => {
     return compareDuplicateCandidateOrder({
       left,
@@ -1856,7 +1862,7 @@ export async function loadOpenClawPluginCliRegistry(
   let selectedMemoryPluginId: string | null = null;
 
   for (const candidate of orderedCandidates) {
-    const manifestRecord = manifestByRoot.get(candidate.rootDir);
+    const manifestRecord = manifestBySource.get(candidate.source) ?? manifestByRoot.get(candidate.rootDir);
     if (!manifestRecord) {
       continue;
     }
