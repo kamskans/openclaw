@@ -25,14 +25,18 @@ type SessionManagerWithRawAppend = SessionManager & {
  * Returns the original message if under the limit, or a new message with
  * truncated text blocks otherwise.
  */
-function capToolResultSize(msg: AgentMessage): AgentMessage {
+function capToolResultSize(msg: AgentMessage, maxChars: number): AgentMessage {
   if ((msg as { role?: string }).role !== "toolResult") {
     return msg;
   }
-  return truncateToolResultMessage(msg, DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS, {
+  return truncateToolResultMessage(msg, maxChars, {
     suffix: (truncatedChars) => formatContextLimitTruncationNotice(truncatedChars),
     minKeepChars: 2_000,
   });
+}
+
+function resolveMaxToolResultChars(opts?: { maxToolResultChars?: number }): number {
+  return Math.max(1, opts?.maxToolResultChars ?? DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS);
 }
 
 function normalizePersistedToolResultName(
@@ -108,6 +112,7 @@ export function installSessionToolResultGuard(
     beforeMessageWriteHook?: (
       event: PluginHookBeforeMessageWriteEvent,
     ) => PluginHookBeforeMessageWriteResult | undefined;
+    maxToolResultChars?: number;
   },
 ): {
   flushPendingToolResults: () => void;
@@ -132,6 +137,7 @@ export function installSessionToolResultGuard(
 
   const allowSyntheticToolResults = opts?.allowSyntheticToolResults ?? true;
   const beforeWrite = opts?.beforeMessageWriteHook;
+  const maxToolResultChars = resolveMaxToolResultChars(opts);
 
   /**
    * Run the before_message_write hook. Returns the (possibly modified) message,
@@ -166,7 +172,7 @@ export function installSessionToolResultGuard(
           }),
         );
         if (flushed) {
-          originalAppend(flushed as never);
+          originalAppend(capToolResultSize(flushed, maxToolResultChars) as never);
         }
       }
     }
@@ -203,7 +209,7 @@ export function installSessionToolResultGuard(
       const normalizedToolResult = normalizePersistedToolResultName(nextMessage, toolName);
       // Apply hard size cap before persistence to prevent oversized tool results
       // from consuming the entire context window on subsequent LLM calls.
-      const capped = capToolResultSize(persistMessage(normalizedToolResult));
+      const capped = capToolResultSize(persistMessage(normalizedToolResult), maxToolResultChars);
       const persisted = applyBeforeWriteHook(
         persistToolResult(capped, {
           toolCallId: id ?? undefined,
@@ -214,7 +220,7 @@ export function installSessionToolResultGuard(
       if (!persisted) {
         return undefined;
       }
-      return originalAppend(persisted as never);
+      return originalAppend(capToolResultSize(persisted, maxToolResultChars) as never);
     }
 
     // Skip tool call extraction for aborted/errored assistant messages.

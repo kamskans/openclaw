@@ -113,7 +113,40 @@ type ChatAbortRequester = {
   isAdmin: boolean;
 };
 
-export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
+/** True when a reply payload carries at least one media reference (mediaUrl or mediaUrls). */
+function isMediaBearingPayload(payload: ReplyPayload): boolean {
+  if (payload.mediaUrl?.trim()) {
+    return true;
+  }
+  if (payload.mediaUrls?.some((url) => url.trim())) {
+    return true;
+  }
+  return false;
+}
+
+async function buildWebchatAudioOnlyAssistantMessage(
+  payloads: ReplyPayload[],
+  options?: {
+    localRoots?: readonly string[];
+    onLocalAudioAccessDenied?: (message: string) => void;
+  },
+): Promise<{ content: Array<Record<string, unknown>>; transcriptText: string } | null> {
+  const audioBlocks = await buildWebchatAudioContentBlocksFromReplyPayloads(payloads, {
+    localRoots: options?.localRoots,
+    onLocalAudioAccessDenied: (err) => {
+      options?.onLocalAudioAccessDenied?.(formatForLog(err));
+    },
+  });
+  if (audioBlocks.length === 0) {
+    return null;
+  }
+  return {
+    transcriptText: "Audio reply",
+    content: [{ type: "text", text: "Audio reply" }, ...audioBlocks],
+  };
+}
+
+export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 let chatHistoryPlaceholderEmitCount = 0;

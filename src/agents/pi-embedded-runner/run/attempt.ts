@@ -149,8 +149,14 @@ import {
 } from "../system-prompt.js";
 import { dropThinkingBlocks } from "../thinking.js";
 import { collectAllowedToolNames } from "../tool-name-allowlist.js";
-import { installToolResultContextGuard } from "../tool-result-context-guard.js";
-import { truncateOversizedToolResultsInSessionManager } from "../tool-result-truncation.js";
+import {
+  installContextEngineLoopHook,
+  installToolResultContextGuard,
+} from "../tool-result-context-guard.js";
+import {
+  resolveLiveToolResultMaxChars,
+  truncateOversizedToolResultsInSessionManager,
+} from "../tool-result-truncation.js";
 import {
   logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas,
@@ -878,6 +884,8 @@ export async function runEmbeddedAttempt(
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
+        config: params.config,
+        contextWindowTokens: params.contextTokenBudget,
         inputProvenance: params.inputProvenance,
         allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
         allowedToolNames,
@@ -1851,17 +1859,39 @@ export async function runEmbeddedAttempt(
 
           const reserveTokens = settingsManager.getCompactionReserveTokens();
           const contextTokenBudget = params.contextTokenBudget ?? DEFAULT_CONTEXT_TOKENS;
-          const preemptiveCompaction = shouldPreemptivelyCompactBeforePrompt({
-            messages: activeSession.messages,
-            systemPrompt: systemPromptText,
-            prompt: effectivePrompt,
-            contextTokenBudget,
-            reserveTokens,
-          });
+          const preemptiveCompaction =
+            params.contextEngine?.info?.ownsCompaction === true
+              ? {
+                  route: "fits" as const,
+                  shouldCompact: false,
+                  estimatedPromptTokens: 0,
+                  promptBudgetBeforeReserve: 0,
+                  overflowTokens: 0,
+                  toolResultReducibleChars: 0,
+                  effectiveReserveTokens: reserveTokens,
+                }
+              : shouldPreemptivelyCompactBeforePrompt({
+                  messages: activeSession.messages,
+                  systemPrompt: systemPromptText,
+                  prompt: effectivePrompt,
+                  contextTokenBudget,
+                  reserveTokens,
+                  toolResultMaxChars: resolveLiveToolResultMaxChars({
+                    contextWindowTokens: contextTokenBudget,
+                    cfg: params.config,
+                    agentId: sessionAgentId,
+                  }),
+                });
           if (preemptiveCompaction.route === "truncate_tool_results_only") {
+            const toolResultMaxChars = resolveLiveToolResultMaxChars({
+              contextWindowTokens: contextTokenBudget,
+              cfg: params.config,
+              agentId: sessionAgentId,
+            });
             const truncationResult = truncateOversizedToolResultsInSessionManager({
               sessionManager,
               contextWindowTokens: contextTokenBudget,
+              maxCharsOverride: toolResultMaxChars,
               sessionFile: params.sessionFile,
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,

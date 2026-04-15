@@ -19,15 +19,27 @@ import {
   resolvePrimaryStringValue,
 } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
+import {
+  listAgentEntries,
+  listAgentIds,
+  resolveAgentConfig,
+  resolveAgentContextLimits,
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+  type ResolvedAgentConfig,
+} from "./agent-scope-config.js";
 import { resolveEffectiveAgentSkillFilter } from "./skills/agent-filter.js";
-import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
-
-let log: ReturnType<typeof createSubsystemLogger> | null = null;
-
-function getLog(): ReturnType<typeof createSubsystemLogger> {
-  log ??= createSubsystemLogger("agent-scope");
-  return log;
-}
+export {
+  listAgentEntries,
+  listAgentIds,
+  resolveAgentConfig,
+  resolveAgentContextLimits,
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+  type ResolvedAgentConfig,
+} from "./agent-scope-config.js";
 
 /** Strip null bytes from paths to prevent ENOTDIR errors. */
 function stripNullBytes(s: string): string {

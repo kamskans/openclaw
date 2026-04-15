@@ -3237,6 +3237,112 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               userTimezone: {
                 type: "string",
               },
+              startupContext: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                    title: "Enable Startup Context",
+                    description:
+                      "Enable the startup-context prelude for bare session resets (default: true). Disable this to fall back to prompt-only behavior with no runtime-loaded daily memory.",
+                  },
+                  applyOn: {
+                    type: "array",
+                    items: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "new",
+                        },
+                        {
+                          type: "string",
+                          const: "reset",
+                        },
+                      ],
+                    },
+                    title: "Startup Context Apply On",
+                    description:
+                      'Chooses which bare reset commands get startup context: include "new", "reset", or both (default: ["new","reset"]).',
+                  },
+                  dailyMemoryDays: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 14,
+                    title: "Startup Context Daily Memory Days",
+                    description:
+                      "Number of dated memory files to load counting backward from today in the configured user timezone (default: 2 for today + yesterday).",
+                  },
+                  maxFileBytes: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 65536,
+                    title: "Startup Context Max File Bytes",
+                    description:
+                      "Maximum bytes allowed per daily memory file when building startup context (default: 16384). Files over this boundary-safe read limit are skipped.",
+                  },
+                  maxFileChars: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 10000,
+                    title: "Startup Context Max File Chars",
+                    description:
+                      "Maximum characters retained from each loaded daily memory file in the startup prelude (default: 1200).",
+                  },
+                  maxTotalChars: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 50000,
+                    title: "Startup Context Max Total Chars",
+                    description:
+                      "Maximum total characters retained across all loaded daily memory files in the startup prelude (default: 2800). Additional files are truncated from the prelude once this cap is reached.",
+                  },
+                },
+                additionalProperties: false,
+                title: "Startup Context",
+                description:
+                  'Runtime-owned first-turn prelude for bare "/new" and "/reset". Use this to control whether recent daily memory files are preloaded into the first prompt instead of asking the model to decide what to read.',
+              },
+              contextLimits: {
+                type: "object",
+                properties: {
+                  memoryGetMaxChars: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 250000,
+                    title: "Default memory_get Max Chars",
+                    description:
+                      "Default max characters returned by memory_get before truncation metadata and continuation notice are added. Increase to approximate older larger excerpts, but keep it bounded.",
+                  },
+                  memoryGetDefaultLines: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 5000,
+                    title: "Default memory_get Line Window",
+                    description:
+                      "Default memory_get line window used when requests omit lines. This controls how many source lines are selected before the max-char cap is applied.",
+                  },
+                  toolResultMaxChars: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 250000,
+                    title: "Default Tool Result Max Chars",
+                    description:
+                      "Default max characters kept for a single live tool result before truncation. This affects both persisted live tool-result writes and overflow-recovery truncation heuristics.",
+                  },
+                  postCompactionMaxChars: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 50000,
+                    title: "Default Post-compaction Max Chars",
+                    description:
+                      "Default max characters retained from AGENTS.md during post-compaction context refresh injection. Lower this to make compaction recovery cheaper, or raise it for agents that depend on longer startup guidance.",
+                  },
+                },
+                additionalProperties: false,
+                title: "Default Context Limits",
+                description:
+                  "Focused per-agent-context budget defaults for selected high-volume excerpts and injected prompt blocks. Use this to tune bounded read/injection sizes without reopening any unbounded call paths.",
+              },
               timeFormat: {
                 anyOf: [
                   {
@@ -5904,6 +6010,64 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     },
                   },
                   additionalProperties: false,
+                },
+                skillsLimits: {
+                  type: "object",
+                  properties: {
+                    maxSkillsPromptChars: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                      title: "Agent Skills Prompt Max Chars",
+                      description:
+                        "Per-agent override for the skills prompt character budget. This extends the existing skills.limits.maxSkillsPromptChars path instead of routing the same budget through contextLimits.",
+                    },
+                  },
+                  additionalProperties: false,
+                  title: "Agent Skills Limits",
+                  description:
+                    "Optional per-agent overrides for skills subsystem budgets. Use this when an agent needs a different skills prompt budget without introducing a second generic context-limits path.",
+                },
+                contextLimits: {
+                  type: "object",
+                  properties: {
+                    memoryGetMaxChars: {
+                      type: "integer",
+                      minimum: 1,
+                      maximum: 250000,
+                      title: "Agent memory_get Max Chars",
+                      description:
+                        "Per-agent override for the default memory_get max character budget.",
+                    },
+                    memoryGetDefaultLines: {
+                      type: "integer",
+                      minimum: 1,
+                      maximum: 5000,
+                      title: "Agent memory_get Line Window",
+                      description:
+                        "Per-agent override for the default memory_get line window when lines is omitted.",
+                    },
+                    toolResultMaxChars: {
+                      type: "integer",
+                      minimum: 1,
+                      maximum: 250000,
+                      title: "Agent Tool Result Max Chars",
+                      description:
+                        "Per-agent override for the live tool-result max character budget.",
+                    },
+                    postCompactionMaxChars: {
+                      type: "integer",
+                      minimum: 1,
+                      maximum: 50000,
+                      title: "Agent Post-compaction Max Chars",
+                      description:
+                        "Per-agent override for the post-compaction AGENTS.md excerpt budget.",
+                    },
+                  },
+                  additionalProperties: false,
+                  title: "Agent Context Limits",
+                  description:
+                    "Optional per-agent overrides for the focused context budget knobs. Omitted fields inherit agents.defaults.contextLimits.",
                 },
                 heartbeat: {
                   type: "object",
@@ -22835,10 +22999,100 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Shared default settings inherited by agents unless overridden per entry in agents.list. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
       tags: ["advanced"],
     },
+    "agents.defaults.contextLimits": {
+      label: "Default Context Limits",
+      help: "Focused per-agent-context budget defaults for selected high-volume excerpts and injected prompt blocks. Use this to tune bounded read/injection sizes without reopening any unbounded call paths.",
+      tags: ["performance"],
+    },
+    "agents.defaults.contextLimits.memoryGetMaxChars": {
+      label: "Default memory_get Max Chars",
+      help: "Default max characters returned by memory_get before truncation metadata and continuation notice are added. Increase to approximate older larger excerpts, but keep it bounded.",
+      tags: ["performance"],
+    },
+    "agents.defaults.contextLimits.memoryGetDefaultLines": {
+      label: "Default memory_get Line Window",
+      help: "Default memory_get line window used when requests omit lines. This controls how many source lines are selected before the max-char cap is applied.",
+      tags: ["performance"],
+    },
+    "agents.defaults.contextLimits.toolResultMaxChars": {
+      label: "Default Tool Result Max Chars",
+      help: "Default max characters kept for a single live tool result before truncation. This affects both persisted live tool-result writes and overflow-recovery truncation heuristics.",
+      tags: ["performance"],
+    },
+    "agents.defaults.contextLimits.postCompactionMaxChars": {
+      label: "Default Post-compaction Max Chars",
+      help: "Default max characters retained from AGENTS.md during post-compaction context refresh injection. Lower this to make compaction recovery cheaper, or raise it for agents that depend on longer startup guidance.",
+      tags: ["performance"],
+    },
+    "agents.defaults.embeddedHarness": {
+      label: "Default Embedded Harness",
+      help: "Default embedded agent harness policy. Use runtime=auto for plugin harness selection, runtime=pi for built-in PI, or a registered harness id such as codex.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.embeddedHarness.runtime": {
+      label: "Default Embedded Harness Runtime",
+      help: "Embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.embeddedHarness.fallback": {
+      label: "Default Embedded Harness Fallback",
+      help: "Embedded harness fallback when no plugin harness matches or an auto-selected plugin harness fails before side effects. Set none to disable automatic PI fallback.",
+      tags: ["reliability"],
+    },
     "agents.list": {
       label: "Agent List",
       help: "Explicit list of configured agents with IDs and optional overrides for model, tools, identity, and workspace. Keep IDs stable over time so bindings, approvals, and session routing remain deterministic.",
       tags: ["advanced"],
+    },
+    "agents.list[].skillsLimits": {
+      label: "Agent Skills Limits",
+      help: "Optional per-agent overrides for skills subsystem budgets. Use this when an agent needs a different skills prompt budget without introducing a second generic context-limits path.",
+      tags: ["performance"],
+    },
+    "agents.list[].skillsLimits.maxSkillsPromptChars": {
+      label: "Agent Skills Prompt Max Chars",
+      help: "Per-agent override for the skills prompt character budget. This extends the existing skills.limits.maxSkillsPromptChars path instead of routing the same budget through contextLimits.",
+      tags: ["performance"],
+    },
+    "agents.list[].contextLimits": {
+      label: "Agent Context Limits",
+      help: "Optional per-agent overrides for the focused context budget knobs. Omitted fields inherit agents.defaults.contextLimits.",
+      tags: ["performance"],
+    },
+    "agents.list[].contextLimits.memoryGetMaxChars": {
+      label: "Agent memory_get Max Chars",
+      help: "Per-agent override for the default memory_get max character budget.",
+      tags: ["performance"],
+    },
+    "agents.list[].contextLimits.memoryGetDefaultLines": {
+      label: "Agent memory_get Line Window",
+      help: "Per-agent override for the default memory_get line window when lines is omitted.",
+      tags: ["performance"],
+    },
+    "agents.list[].contextLimits.toolResultMaxChars": {
+      label: "Agent Tool Result Max Chars",
+      help: "Per-agent override for the live tool-result max character budget.",
+      tags: ["performance"],
+    },
+    "agents.list[].contextLimits.postCompactionMaxChars": {
+      label: "Agent Post-compaction Max Chars",
+      help: "Per-agent override for the post-compaction AGENTS.md excerpt budget.",
+      tags: ["performance"],
+    },
+    "agents.list.*.embeddedHarness": {
+      label: "Agent Embedded Harness",
+      help: "Per-agent embedded harness policy override. Use fallback=none to make this agent fail instead of falling back to PI.",
+      tags: ["advanced"],
+    },
+    "agents.list.*.embeddedHarness.runtime": {
+      label: "Agent Embedded Harness Runtime",
+      help: "Per-agent embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+      tags: ["advanced"],
+    },
+    "agents.list.*.embeddedHarness.fallback": {
+      label: "Agent Embedded Harness Fallback",
+      help: "Per-agent embedded harness fallback. Set none to disable automatic PI fallback for this agent.",
+      tags: ["reliability"],
     },
     "gateway.port": {
       label: "Gateway Port",
@@ -24217,6 +24471,41 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Bootstrap Prompt Truncation Warning",
       help: 'Inject agent-visible warning text when bootstrap files are truncated: "off", "once" (default), or "always".',
       tags: ["advanced"],
+    },
+    "agents.defaults.startupContext": {
+      label: "Startup Context",
+      help: 'Runtime-owned first-turn prelude for bare "/new" and "/reset". Use this to control whether recent daily memory files are preloaded into the first prompt instead of asking the model to decide what to read.',
+      tags: ["advanced"],
+    },
+    "agents.defaults.startupContext.enabled": {
+      label: "Enable Startup Context",
+      help: "Enable the startup-context prelude for bare session resets (default: true). Disable this to fall back to prompt-only behavior with no runtime-loaded daily memory.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.startupContext.applyOn": {
+      label: "Startup Context Apply On",
+      help: 'Chooses which bare reset commands get startup context: include "new", "reset", or both (default: ["new","reset"]).',
+      tags: ["advanced"],
+    },
+    "agents.defaults.startupContext.dailyMemoryDays": {
+      label: "Startup Context Daily Memory Days",
+      help: "Number of dated memory files to load counting backward from today in the configured user timezone (default: 2 for today + yesterday).",
+      tags: ["advanced"],
+    },
+    "agents.defaults.startupContext.maxFileBytes": {
+      label: "Startup Context Max File Bytes",
+      help: "Maximum bytes allowed per daily memory file when building startup context (default: 16384). Files over this boundary-safe read limit are skipped.",
+      tags: ["performance", "storage"],
+    },
+    "agents.defaults.startupContext.maxFileChars": {
+      label: "Startup Context Max File Chars",
+      help: "Maximum characters retained from each loaded daily memory file in the startup prelude (default: 1200).",
+      tags: ["performance", "storage"],
+    },
+    "agents.defaults.startupContext.maxTotalChars": {
+      label: "Startup Context Max Total Chars",
+      help: "Maximum total characters retained across all loaded daily memory files in the startup prelude (default: 2800). Additional files are truncated from the prelude once this cap is reached.",
+      tags: ["performance"],
     },
     "agents.defaults.envelopeTimezone": {
       label: "Envelope Timezone",

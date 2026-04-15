@@ -3,7 +3,6 @@ import {
   jsonResult,
   readNumberParam,
   readStringParam,
-  type AnyAgentTool,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
@@ -144,7 +143,7 @@ async function executeMemoryReadResult<T>(params: {
 export function createMemorySearchTool(options: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
-}): AnyAgentTool | null {
+}) {
   return createMemoryTool({
     options,
     label: "Memory Search",
@@ -177,7 +176,9 @@ export function createMemorySearchTool(options: {
             sessionKey: options.agentSessionKey,
           });
           let rawResults: MemorySearchResult[] = [];
-          let surfacedMemoryResults: Array<MemorySearchResult & { corpus: "memory" }> = [];
+          let surfacedMemoryResults: Array<
+            Record<string, unknown> & { corpus: "memory"; score: number; path: string }
+          > = [];
           let provider: string | undefined;
           let model: string | undefined;
           let fallback: unknown;
@@ -250,13 +251,13 @@ export function createMemorySearchTool(options: {
 export function createMemoryGetTool(options: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
-}): AnyAgentTool | null {
+}) {
   return createMemoryTool({
     options,
     label: "Memory Get",
     name: "memory_get",
     description:
-      "Safe snippet read from MEMORY.md or memory/*.md with optional from/lines; `corpus=wiki` reads from registered compiled-wiki supplements. Use after search to pull only the needed lines and keep context small.",
+      "Safe exact excerpt read from MEMORY.md or memory/*.md. Defaults to a bounded excerpt when lines are omitted, includes truncation/continuation info when more content exists, and `corpus=wiki` reads from registered compiled-wiki supplements.",
     parameters: MemoryGetSchema,
     execute:
       ({ cfg, agentId }) =>
