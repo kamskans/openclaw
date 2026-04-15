@@ -132,7 +132,7 @@ describe("short-term dreaming config", () => {
       maxAgeDays: 30,
       verboseLogging: false,
       storage: {
-        mode: "inline",
+        mode: "separate",
         separateReports: false,
       },
     });
@@ -171,7 +171,7 @@ describe("short-term dreaming config", () => {
       maxAgeDays: 30,
       verboseLogging: true,
       storage: {
-        mode: "inline",
+        mode: "separate",
         separateReports: false,
       },
     });
@@ -207,7 +207,7 @@ describe("short-term dreaming config", () => {
       maxAgeDays: 45,
       verboseLogging: false,
       storage: {
-        mode: "inline",
+        mode: "separate",
         separateReports: false,
       },
     });
@@ -242,7 +242,7 @@ describe("short-term dreaming config", () => {
       maxAgeDays: 30,
       verboseLogging: false,
       storage: {
-        mode: "inline",
+        mode: "separate",
         separateReports: false,
       },
     });
