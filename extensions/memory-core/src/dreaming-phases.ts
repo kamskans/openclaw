@@ -6,6 +6,8 @@ import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memo
 import {
   buildSessionEntry,
   listSessionFilesForAgent,
+  loadDreamingNarrativeTranscriptPathSetForAgent,
+  normalizeSessionTranscriptPathForComparison,
   parseUsageCountedSessionIdFromFileName,
   sessionPathForFile,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
@@ -675,13 +677,25 @@ async function collectSessionIngestionBatches(params: {
   const nextSeenMessages: Record<string, string[]> = { ...params.state.seenMessages };
   let changed = false;
 
-  const sessionFiles: Array<{ agentId: string; absolutePath: string; sessionPath: string }> = [];
+  const sessionFiles: Array<{
+    agentId: string;
+    absolutePath: string;
+    generatedByDreamingNarrative: boolean;
+    sessionPath: string;
+  }> = [];
   for (const agentId of agentIds) {
     const files = await listSessionFilesForAgent(agentId);
+    const dreamingTranscriptPaths =
+      files.length > 0
+        ? loadDreamingNarrativeTranscriptPathSetForAgent(agentId)
+        : new Set<string>();
     for (const absolutePath of files) {
       sessionFiles.push({
         agentId,
         absolutePath,
+        generatedByDreamingNarrative: dreamingTranscriptPaths.has(
+          normalizeSessionTranscriptPathForComparison(absolutePath),
+        ),
         sessionPath: sessionPathForFile(absolutePath),
       });
     }
@@ -741,7 +755,9 @@ async function collectSessionIngestionBatches(params: {
       continue;
     }
 
-    const entry = await buildSessionEntry(file.absolutePath);
+    const entry = await buildSessionEntry(file.absolutePath, {
+      generatedByDreamingNarrative: file.generatedByDreamingNarrative,
+    });
     if (!entry) {
       continue;
     }
