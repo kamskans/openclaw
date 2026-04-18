@@ -416,9 +416,18 @@ async function handleUpdateCron(
     return;
   }
 
+  const job = store.jobs[idx];
+  let changed = false;
+
+  // Handle enabled/disabled toggle
+  if (typeof body.enabled === "boolean") {
+    job.enabled = body.enabled;
+    job.updatedAtMs = Date.now();
+    changed = true;
+  }
+
   const schedule = body.schedule as Record<string, unknown> | undefined;
   if (schedule) {
-    const job = store.jobs[idx];
     if (typeof schedule.expr === "string") {
       (job.schedule as any).expr = schedule.expr;
       (job.schedule as any).kind = "cron";
@@ -429,9 +438,12 @@ async function handleUpdateCron(
     // Clear cached next-run so the cron runner recalculates from the new schedule.
     delete (job.state as any).nextRunAtMs;
     job.updatedAtMs = Date.now();
+    changed = true;
   }
 
-  await saveCronStore(storePath, store);
+  if (changed) {
+    await saveCronStore(storePath, store);
+  }
   sendJson(res, 200, { ok: true, job: store.jobs[idx] });
 }
 
