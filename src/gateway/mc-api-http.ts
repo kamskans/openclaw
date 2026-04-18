@@ -443,6 +443,16 @@ async function handleUpdateCron(
 
   if (changed) {
     await saveCronStore(storePath, store);
+    // Touch openclaw.json to trigger the config watcher, which rebuilds the
+    // cron service and picks up the store changes (enabled toggle, schedule).
+    // Without this, the in-memory cron runner ignores store file mutations.
+    const configPath = cfg.configPath || `${process.env.HOME || "/root"}/.openclaw/openclaw.json`;
+    try {
+      const now = new Date();
+      await fsPromises.utimes(configPath, now, now);
+    } catch {
+      // Config touch is best-effort — cron store was already persisted.
+    }
   }
   sendJson(res, 200, { ok: true, job: store.jobs[idx] });
 }
