@@ -191,6 +191,9 @@ export async function createGatewayRuntimeState(params: {
         rateLimiter: params.rateLimiter,
         getReadiness: params.getReadiness,
         tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
+        cron: params.deps.cron ? {
+          update: (id: string, patch: Record<string, unknown>) => params.deps.cron!.update(id, patch as any),
+        } : undefined,
       });
       try {
         await listenGatewayHttpServer({

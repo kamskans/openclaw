@@ -748,6 +748,8 @@ export function createGatewayHttpServer(opts: {
   rateLimiter?: AuthRateLimiter;
   getReadiness?: ReadinessChecker;
   tlsOptions?: TlsOptions;
+  /** CronService for MC API cron management (update/enable/disable). */
+  cron?: { update: (id: string, patch: Record<string, unknown>) => Promise<unknown>; list?: () => unknown[] };
 }): HttpServer {
   const {
     canvasHost,
@@ -869,6 +871,7 @@ export function createGatewayHttpServer(opts: {
               auth: resolvedAuth,
               trustedProxies,
               rateLimiter,
+              cron: opts.cron,
             }),
         },
       ];

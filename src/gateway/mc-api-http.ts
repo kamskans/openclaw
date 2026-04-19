@@ -77,6 +77,8 @@ type McApiOptions = {
   auth: ResolvedGatewayAuth;
   trustedProxies?: string[];
   rateLimiter?: AuthRateLimiter;
+  /** CronService instance for managing cron jobs through the native API. */
+  cron?: { update: (id: string, patch: Record<string, unknown>) => Promise<unknown>; list?: () => unknown[] };
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -390,6 +392,7 @@ async function handleUpdateCron(
   req: IncomingMessage,
   res: ServerResponse,
   cronId: string,
+  cronService?: McApiOptions["cron"],
 ): Promise<void> {
   let body: Record<string, unknown>;
   try {
@@ -406,55 +409,51 @@ async function handleUpdateCron(
     return;
   }
 
-  const cfg = loadConfig();
-  const storePath = resolveCronStorePath(cfg.cron?.store);
-  const store = await loadCronStore(storePath);
+  // Build the patch object for CronService.update()
+  const patch: Record<string, unknown> = {};
 
-  const idx = store.jobs.findIndex((j) => j.id === cronId);
-  if (idx === -1) {
-    sendJson(res, 404, { ok: false, error: "Cron job not found" });
-    return;
-  }
-
-  const job = store.jobs[idx];
-  let changed = false;
-
-  // Handle enabled/disabled toggle
   if (typeof body.enabled === "boolean") {
-    job.enabled = body.enabled;
-    job.updatedAtMs = Date.now();
-    changed = true;
+    patch.enabled = body.enabled;
   }
 
   const schedule = body.schedule as Record<string, unknown> | undefined;
   if (schedule) {
+    const sched: Record<string, unknown> = {};
     if (typeof schedule.expr === "string") {
-      (job.schedule as any).expr = schedule.expr;
-      (job.schedule as any).kind = "cron";
+      sched.expr = schedule.expr;
+      sched.kind = "cron";
     }
     if (typeof schedule.tz === "string") {
-      (job.schedule as any).tz = schedule.tz;
+      sched.tz = schedule.tz;
     }
-    // Clear cached next-run so the cron runner recalculates from the new schedule.
-    delete (job.state as any).nextRunAtMs;
-    job.updatedAtMs = Date.now();
-    changed = true;
+    if (Object.keys(sched).length > 0) patch.schedule = sched;
   }
 
-  if (changed) {
-    await saveCronStore(storePath, store);
-    // Touch openclaw.json to trigger the config watcher, which rebuilds the
-    // cron service and picks up the store changes (enabled toggle, schedule).
-    // Without this, the in-memory cron runner ignores store file mutations.
-    const configPath = cfg.configPath || `${process.env.HOME || "/root"}/.openclaw/openclaw.json`;
+  if (Object.keys(patch).length === 0) {
+    sendJson(res, 400, { ok: false, error: "No valid fields to update" });
+    return;
+  }
+
+  // Use CronService.update() when available — this updates both in-memory state
+  // and the store file atomically, so the cron runner picks up changes immediately.
+  if (cronService) {
     try {
-      const now = new Date();
-      await fsPromises.utimes(configPath, now, now);
-    } catch {
-      // Config touch is best-effort — cron store was already persisted.
+      const updated = await cronService.update(cronId, patch);
+      if (!updated) {
+        sendJson(res, 404, { ok: false, error: "Cron job not found" });
+        return;
+      }
+      sendJson(res, 200, { ok: true, job: updated });
+      return;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      sendJson(res, 500, { ok: false, error: `Failed to update cron: ${msg}` });
+      return;
     }
   }
-  sendJson(res, 200, { ok: true, job: store.jobs[idx] });
+
+  // Fallback: no CronService available (shouldn't happen in normal operation).
+  sendJson(res, 500, { ok: false, error: "Cron service not available" });
 }
 
 // ── Route: PUT /mc/v1/system/timezone ────────────────────────────────────────
@@ -736,7 +735,7 @@ export async function handleMcApiHttpRequest(
   }
   if (cronIdMatch && req.method === "PATCH") {
     const cronId = decodeURIComponent(cronIdMatch[1]);
-    await handleUpdateCron(req, res, cronId);
+    await handleUpdateCron(req, res, cronId, opts.cron);
     return true;
   }
 
