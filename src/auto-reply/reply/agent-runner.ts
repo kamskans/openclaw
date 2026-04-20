@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { hasConfiguredModelFallbacks, resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { resolveContextTokensForModel } from "../../agents/context.js";
+import { lookupContextTokens, resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
