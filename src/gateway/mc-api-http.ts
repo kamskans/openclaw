@@ -77,8 +77,6 @@ type McApiOptions = {
   auth: ResolvedGatewayAuth;
   trustedProxies?: string[];
   rateLimiter?: AuthRateLimiter;
-  /** CronService instance for managing cron jobs through the native API. */
-  cron?: { update: (id: string, patch: Record<string, unknown>) => Promise<unknown>; list?: () => unknown[] };
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -392,7 +390,6 @@ async function handleUpdateCron(
   req: IncomingMessage,
   res: ServerResponse,
   cronId: string,
-  cronService?: McApiOptions["cron"],
 ): Promise<void> {
   let body: Record<string, unknown>;
   try {
@@ -409,51 +406,54 @@ async function handleUpdateCron(
     return;
   }
 
-  // Build the patch object for CronService.update()
-  const patch: Record<string, unknown> = {};
+  const cfg = loadConfig();
+  const storePath = resolveCronStorePath(cfg.cron?.store);
+  const store = await loadCronStore(storePath);
+
+  const idx = store.jobs.findIndex((j) => j.id === cronId);
+  if (idx === -1) {
+    sendJson(res, 404, { ok: false, error: "Cron job not found" });
+    return;
+  }
+
+  const job = store.jobs[idx];
+  let changed = false;
 
   if (typeof body.enabled === "boolean") {
-    patch.enabled = body.enabled;
+    job.enabled = body.enabled;
+    job.updatedAtMs = Date.now();
+    changed = true;
   }
 
   const schedule = body.schedule as Record<string, unknown> | undefined;
   if (schedule) {
-    const sched: Record<string, unknown> = {};
     if (typeof schedule.expr === "string") {
-      sched.expr = schedule.expr;
-      sched.kind = "cron";
+      (job.schedule as any).expr = schedule.expr;
+      (job.schedule as any).kind = "cron";
     }
     if (typeof schedule.tz === "string") {
-      sched.tz = schedule.tz;
+      (job.schedule as any).tz = schedule.tz;
     }
-    if (Object.keys(sched).length > 0) patch.schedule = sched;
+    delete (job.state as any).nextRunAtMs;
+    job.updatedAtMs = Date.now();
+    changed = true;
   }
 
-  if (Object.keys(patch).length === 0) {
-    sendJson(res, 400, { ok: false, error: "No valid fields to update" });
-    return;
-  }
-
-  // Use CronService.update() when available — this updates both in-memory state
-  // and the store file atomically, so the cron runner picks up changes immediately.
-  if (cronService) {
+  if (changed) {
+    await saveCronStore(storePath, store);
+    // Touch openclaw.json to trigger the config watcher, which rebuilds the
+    // cron service and reloads the store with the updated schedule.
     try {
-      const updated = await cronService.update(cronId, patch);
-      if (!updated) {
-        sendJson(res, 404, { ok: false, error: "Cron job not found" });
-        return;
-      }
-      sendJson(res, 200, { ok: true, job: updated });
-      return;
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      sendJson(res, 500, { ok: false, error: `Failed to update cron: ${msg}` });
-      return;
+      const now = new Date();
+      await fsPromises.utimes(
+        `${process.env.HOME || "/root"}/.openclaw/openclaw.json`,
+        now, now,
+      );
+    } catch {
+      // Best-effort — store was already persisted.
     }
   }
-
-  // Fallback: no CronService available (shouldn't happen in normal operation).
-  sendJson(res, 500, { ok: false, error: "Cron service not available" });
+  sendJson(res, 200, { ok: true, job: store.jobs[idx] });
 }
 
 // ── Route: PUT /mc/v1/system/timezone ────────────────────────────────────────
@@ -735,7 +735,7 @@ export async function handleMcApiHttpRequest(
   }
   if (cronIdMatch && req.method === "PATCH") {
     const cronId = decodeURIComponent(cronIdMatch[1]);
-    await handleUpdateCron(req, res, cronId, opts.cron);
+    await handleUpdateCron(req, res, cronId);
     return true;
   }
 
