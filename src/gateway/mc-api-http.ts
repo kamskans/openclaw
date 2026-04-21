@@ -9,6 +9,7 @@
  * Endpoints:
  *   POST /mc/v1/pairing/approve                    → approve a Telegram pairing code
  *   GET  /mc/v1/crons?agentId=X                   → list cron jobs (optionally filtered by agent)
+ *   POST /mc/v1/crons                              → create a cron job (one-shot or recurring)
  *   DELETE /mc/v1/crons/:id                        → delete a cron job
  *   GET  /mc/v1/sessions?agentId=X               → list sessions (with optional filters)
  *   GET  /mc/v1/sessions/:key/messages?limit=200  → chat history for a session
@@ -456,6 +457,102 @@ async function handleUpdateCron(
   sendJson(res, 200, { ok: true, job: store.jobs[idx] });
 }
 
+// ── Route: POST /mc/v1/crons ────────────────────────────────────────────────
+//
+// Append a new cron job to the store. The primary use-case is Mission
+// Control's event-driven agent ping: Convex posts a one-shot job with
+//   schedule.kind = "at", at = <now>, wakeMode = "now", deleteAfterRun = true,
+//   payload.kind = "systemEvent", sessionTarget = "main"
+// so the cron service fires immediately, injects the system-event text into
+// the target agent's session, and auto-removes the job on successful run.
+//
+// The handler validates the minimum shape and appends. If a job with the
+// same id already exists it is replaced (so callers can retry safely).
+
+async function handlePostCron(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    const raw = await readBody(req, MAX_BODY_BYTES);
+    body = JSON.parse(raw) as Record<string, unknown>;
+  } catch (err: unknown) {
+    if (err instanceof Error && err.message === "payload too large") {
+      sendJson(res, 413, {
+        error: { message: "Payload too large", type: "invalid_request_error" },
+      });
+    } else {
+      sendInvalidRequest(res, "Invalid JSON body");
+    }
+    return;
+  }
+
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  const agentId = typeof body.agentId === "string" ? body.agentId.trim() : "";
+  const schedule = body.schedule as Record<string, unknown> | undefined;
+  const payload = body.payload as Record<string, unknown> | undefined;
+  if (!id) {
+    sendInvalidRequest(res, "Missing required field: id");
+    return;
+  }
+  if (!agentId) {
+    sendInvalidRequest(res, "Missing required field: agentId");
+    return;
+  }
+  if (!schedule || typeof schedule.kind !== "string") {
+    sendInvalidRequest(res, "Missing or invalid field: schedule");
+    return;
+  }
+  if (!payload || typeof payload.kind !== "string") {
+    sendInvalidRequest(res, "Missing or invalid field: payload");
+    return;
+  }
+
+  const cfg = loadConfig();
+  const storePath = resolveCronStorePath(cfg.cron?.store);
+  const store = await loadCronStore(storePath);
+
+  const now = Date.now();
+  const job: Record<string, unknown> = {
+    id,
+    name: typeof body.name === "string" ? body.name : id,
+    agentId,
+    schedule,
+    sessionTarget: typeof body.sessionTarget === "string" ? body.sessionTarget : "main",
+    wakeMode: body.wakeMode === "next-heartbeat" ? "next-heartbeat" : "now",
+    sessionKey: typeof body.sessionKey === "string" ? body.sessionKey : undefined,
+    payload,
+    enabled: body.enabled === false ? false : true,
+    deleteAfterRun: body.deleteAfterRun === true,
+    createdAtMs: now,
+    updatedAtMs: now,
+    state: {},
+  };
+
+  const existingIdx = store.jobs.findIndex((j) => j.id === id);
+  if (existingIdx >= 0) {
+    store.jobs[existingIdx] = job as typeof store.jobs[number];
+  } else {
+    store.jobs.push(job as typeof store.jobs[number]);
+  }
+  await saveCronStore(storePath, store);
+
+  // Touch openclaw.json so the config watcher rebuilds the cron service
+  // and picks up the new job — same trick handleUpdateCron uses.
+  try {
+    const ts = new Date();
+    await fsPromises.utimes(
+      `${process.env.HOME || "/root"}/.openclaw/openclaw.json`,
+      ts, ts,
+    );
+  } catch {
+    // Best-effort — store was already persisted.
+  }
+
+  sendJson(res, 200, { ok: true, job });
+}
+
 // ── Route: PUT /mc/v1/system/timezone ────────────────────────────────────────
 
 async function handleSetTimezone(
@@ -723,6 +820,13 @@ export async function handleMcApiHttpRequest(
   // ── GET /mc/v1/crons ──────────────────────────────────────────────────
   if (subPath === "/crons" && req.method === "GET") {
     await handleListCrons(req, res, url);
+    return true;
+  }
+
+  // ── POST /mc/v1/crons ─────────────────────────────────────────────────
+  // Append a new job (used by Convex event-driven agent pings).
+  if (subPath === "/crons" && req.method === "POST") {
+    await handlePostCron(req, res);
     return true;
   }
 
