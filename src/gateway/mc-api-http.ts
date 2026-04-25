@@ -16,6 +16,8 @@
  *   GET  /mc/v1/agents/:agentId/files             → list workspace files
  *   GET  /mc/v1/agents/:agentId/files/:name        → read a workspace file
  *   PUT  /mc/v1/agents/:agentId/files/:name        → write a workspace file
+ *   GET  /mc/v1/agents/pauses                      → list paused agent ids
+ *   POST /mc/v1/agents/:agentId/pause              → set paused state {paused: bool}
  *   GET  /mc/v1/browser/linkedin-cookies           → extract LinkedIn cookies via CDP
  *   POST /mc/v1/browser/navigate                   → navigate Chromium to a URL via CDP
  */
@@ -45,6 +47,7 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { authorizeGatewayHttpRequestOrReply } from "./http-utils.js";
 import { sendJson, sendInvalidRequest, sendMethodNotAllowed } from "./http-common.js";
+import { isAgentPaused, listPausedAgents, setAgentPause } from "./mc-agent-pauses.js";
 import {
   listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
@@ -509,6 +512,14 @@ async function handlePostCron(
     return;
   }
 
+  // Agent pause gate: if the target agent is paused, swallow the create.
+  // Returning 200 + skipped lets Convex/notifyAgent treat this as
+  // "delivered, nothing to do" rather than failing and retrying forever.
+  if (await isAgentPaused(agentId)) {
+    sendJson(res, 200, { ok: true, skipped: "agent_paused", agentId });
+    return;
+  }
+
   const cfg = loadConfig();
   const storePath = resolveCronStorePath(cfg.cron?.store);
   const store = await loadCronStore(storePath);
@@ -782,6 +793,94 @@ async function handlePairingApprove(req: IncomingMessage, res: ServerResponse): 
   sendJson(res, 200, { ok: true, id: approved.id });
 }
 
+// ── Route: GET /mc/v1/agents/pauses ─────────────────────────────────────────
+
+async function handleListPauses(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const paused = await listPausedAgents();
+  sendJson(res, 200, { ok: true, paused });
+}
+
+// ── Route: POST /mc/v1/agents/:agentId/pause ───────────────────────────────
+//
+// Body: { paused: true | false }
+//
+// On pause:  flag agent in agent-pauses.json AND mark every cron job
+//   owned by that agent enabled=false (with state.pausedByAgentPause=true
+//   so unpause only re-enables what we paused, not crons the user
+//   manually disabled for other reasons).
+// On unpause: clear flag AND re-enable jobs marked pausedByAgentPause.
+//
+// notifyAgent's POST /mc/v1/crons short-circuits on isAgentPaused, so
+// even if Convex fires a wake during the pause, it's swallowed.
+
+async function handleSetPause(
+  req: IncomingMessage,
+  res: ServerResponse,
+  agentId: string,
+): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    const raw = await readBody(req, 1024);
+    body = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    sendInvalidRequest(res, "Invalid JSON body");
+    return;
+  }
+  if (typeof body.paused !== "boolean") {
+    sendInvalidRequest(res, "Missing required field: paused (boolean)");
+    return;
+  }
+  const paused = body.paused;
+
+  await setAgentPause(agentId, paused);
+
+  // Sync against existing cron jobs so already-scheduled work also halts.
+  const cfg = loadConfig();
+  const storePath = resolveCronStorePath(cfg.cron?.store);
+  const store = await loadCronStore(storePath);
+
+  let mutated = 0;
+  for (const job of store.jobs) {
+    if ((job as { agentId?: string }).agentId !== agentId) continue;
+    const j = job as Record<string, unknown>;
+    const state = (j.state ?? {}) as Record<string, unknown>;
+    if (paused) {
+      // Only stamp + disable jobs that were currently enabled. Leaves
+      // already-disabled jobs alone.
+      if (j.enabled === true) {
+        j.enabled = false;
+        state.pausedByAgentPause = true;
+        j.state = state;
+        j.updatedAtMs = Date.now();
+        mutated++;
+      }
+    } else {
+      if (state.pausedByAgentPause === true) {
+        j.enabled = true;
+        delete state.pausedByAgentPause;
+        j.state = state;
+        j.updatedAtMs = Date.now();
+        mutated++;
+      }
+    }
+  }
+  if (mutated > 0) {
+    await saveCronStore(storePath, store);
+    // Touch openclaw.json so the config watcher rebuilds the cron service.
+    try {
+      const ts = new Date();
+      await fsPromises.utimes(
+        `${process.env.HOME || "/root"}/.openclaw/openclaw.json`,
+        ts, ts,
+      );
+    } catch {
+      // best-effort
+    }
+  }
+
+  sendJson(res, 200, { ok: true, agentId, paused, jobsAdjusted: mutated });
+}
+
 // ── Main handler ───────────────────────────────────────────────────────────
 
 /**
@@ -866,6 +965,24 @@ export async function handleMcApiHttpRequest(
   if (sessionsMatch && req.method === "GET") {
     const sessionKey = decodeURIComponent(sessionsMatch[1]);
     await handleGetMessages(req, res, sessionKey, url);
+    return true;
+  }
+
+  // ── GET /mc/v1/agents/pauses ────────────────────────────────────────
+  if (subPath === "/agents/pauses" && req.method === "GET") {
+    await handleListPauses(req, res);
+    return true;
+  }
+
+  // ── POST /mc/v1/agents/:agentId/pause ───────────────────────────────
+  const agentPauseMatch = subPath.match(/^\/agents\/([^/]+)\/pause$/);
+  if (agentPauseMatch && req.method === "POST") {
+    const agentId = decodeURIComponent(agentPauseMatch[1]).trim();
+    if (!agentId) {
+      sendInvalidRequest(res, "missing agentId");
+      return true;
+    }
+    await handleSetPause(req, res, agentId);
     return true;
   }
 
