@@ -556,6 +556,32 @@ export async function handleOpenAiHttpRequest(
   }
 
   setSseHeaders(res);
+  // MC: immediately flush an SSE comment frame so Cloudflare (and any other
+  // proxy enforcing an "origin must produce first byte within Ns" timer)
+  // counts the response as started. Without this, slow session loads, slow
+  // first LLM tokens, or pre-stream tool calls can blow past the 100s edge
+  // timeout and surface as a bare HTTP 524 to the user.
+  try {
+    res.write(": connected\n\n");
+  } catch {
+    /* socket may already be gone — fall through to normal handling */
+  }
+  // MC: keep the SSE connection alive across long pre-token waits (cold
+  // session load, model-router fallback chains, long-running tools). One
+  // comment frame every 20s comfortably stays inside CF's 100s budget.
+  const sseKeepalive = setInterval(() => {
+    if (res.writableEnded) return;
+    try {
+      res.write(": ping\n\n");
+    } catch {
+      /* best-effort; the close handler below will clean up */
+    }
+  }, 20_000);
+  const stopSseKeepalive = () => {
+    clearInterval(sseKeepalive);
+  };
+  res.once("close", stopSseKeepalive);
+  res.once("finish", stopSseKeepalive);
 
   let wroteRole = false;
   let sawAssistantDelta = false;
@@ -597,6 +623,7 @@ export async function handleOpenAiHttpRequest(
         closed = true;
         stopWatchingDisconnect();
         unsubscribe();
+        stopSseKeepalive();
         writeDone(res);
         res.end();
       }
@@ -606,6 +633,7 @@ export async function handleOpenAiHttpRequest(
   stopWatchingDisconnect = watchClientDisconnect(req, res, abortController, () => {
     closed = true;
     unsubscribe();
+    stopSseKeepalive();
   });
 
   void (async () => {
@@ -653,6 +681,7 @@ export async function handleOpenAiHttpRequest(
         closed = true;
         stopWatchingDisconnect();
         unsubscribe();
+        stopSseKeepalive();
         writeDone(res);
         res.end();
       }
