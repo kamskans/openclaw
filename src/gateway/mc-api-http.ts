@@ -54,6 +54,7 @@ import {
   loadSessionEntry,
   readSessionMessages,
 } from "./session-utils.js";
+import { tryHandleCodexAuthRoute } from "./codex-oauth-http.js";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -915,6 +916,13 @@ export async function handleMcApiHttpRequest(
   }
 
   const subPath = pathname.slice(MC_API_PREFIX.length);
+
+  // ── /codex/auth/* — ChatGPT subscription OAuth flow ───────────────────
+  // See codex-oauth-http.ts for the full state-machine doc. Sub-router
+  // returns true iff this is a codex route; otherwise we fall through.
+  if (await tryHandleCodexAuthRoute(subPath, req, res, url)) {
+    return true;
+  }
 
   // ── GET /mc/v1/crons ──────────────────────────────────────────────────
   if (subPath === "/crons" && req.method === "GET") {
