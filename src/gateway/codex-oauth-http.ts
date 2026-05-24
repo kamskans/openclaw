@@ -48,7 +48,8 @@ import { randomBytes } from "node:crypto";
 import { loginOpenAICodex, type OAuthCredentials } from "@mariozechner/pi-ai/oauth";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "../infra/net/undici-global-dispatcher.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/upsert-with-lock.js";
-import { mutateConfigFile } from "../config/config.js";
+import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
+import { loadConfig, mutateConfigFile } from "../config/config.js";
 import { sendJson, sendInvalidRequest } from "./http-common.js";
 
 const SESSION_TTL_MS = 15 * 60 * 1000;
@@ -363,23 +364,72 @@ async function handleComplete(req: IncomingMessage, res: ServerResponse): Promis
     }
     const creds = await session.loginPromise;
     const profileId = buildCodexProfileId();
-    await upsertAuthProfileWithLock({
-      profileId,
-      credential: {
-        type: "oauth",
-        provider: "openai-codex",
-        access: creds.access,
-        refresh: creds.refresh,
-        expires: creds.expires,
-        email: creds.email,
-        accountId: creds.accountId,
-        projectId: creds.projectId,
-        enterpriseUrl: creds.enterpriseUrl,
-      },
-    });
+    const credential = {
+      type: "oauth" as const,
+      provider: "openai-codex",
+      access: creds.access,
+      refresh: creds.refresh,
+      expires: creds.expires,
+      email: creds.email,
+      accountId: creds.accountId,
+      projectId: creds.projectId,
+      enterpriseUrl: creds.enterpriseUrl,
+    };
+
+    // Fan out the credential to every agent's auth-profiles.json. The
+    // auth store is per-agent on disk (~/.openclaw/agents/<id>/agent/
+    // auth-profiles.json) — there's no global config-level store that
+    // all agents inherit from. Without this fan-out, only `main`'s
+    // store would get the OAuth and the other 5 agents would silently
+    // fall back to the router (the deployment-level DEFAULT_MODEL),
+    // wasting the customer's ChatGPT subscription.
+    //
+    // The same refresh machinery (refreshOAuthTokenWithLock at
+    // auth-profiles/oauth.ts:158) runs per-agent on each call, so each
+    // copy of the credential rotates independently when its expiry
+    // hits. The refresh tokens are minted from the same OAuth flow
+    // and remain valid in parallel — pi-ai's openai-codex provider
+    // allows multiple concurrent refreshers for the same identity.
+    const cfg = loadConfig();
+    const agentIds = listAgentIds(cfg);
+    const fanOutResults: Array<{ agentId: string; ok: boolean; error?: string }> = [];
+    for (const agentId of agentIds) {
+      const agentDir = resolveAgentDir(cfg, agentId);
+      try {
+        await upsertAuthProfileWithLock({
+          profileId,
+          credential,
+          agentDir,
+        });
+        fanOutResults.push({ agentId, ok: true });
+      } catch (err) {
+        fanOutResults.push({
+          agentId,
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    const fanOutFailures = fanOutResults.filter((r) => !r.ok);
+    if (fanOutFailures.length > 0 && fanOutFailures.length === agentIds.length) {
+      // All writes failed — surface as a hard error so the UI doesn't
+      // claim "connected" when nothing was persisted.
+      throw new Error(
+        `Failed to persist credential to any agent's auth store: ${fanOutFailures.map((f) => `${f.agentId}: ${f.error}`).join("; ")}`,
+      );
+    }
+
     session.profileId = profileId;
     session.accountId = creds.accountId;
     session.email = creds.email;
+    if (fanOutFailures.length > 0) {
+      // Partial success — keep state "connected" but record the warning
+      // so the UI can surface "connected, but some agents may need a
+      // restart". Common cause: an agent dir not yet provisioned on
+      // first-boot when OAuth is connected very early.
+      session.error = `Connected, but couldn't write to ${fanOutFailures.length}/${agentIds.length} agent stores: ${fanOutFailures.map((f) => f.agentId).join(", ")}`;
+    }
 
     // Flip the codex plugin on + retarget every agent's primary model.
     // If this throws we still flip status to connected (the credential
