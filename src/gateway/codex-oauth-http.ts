@@ -48,6 +48,7 @@ import { randomBytes } from "node:crypto";
 import { loginOpenAICodex, type OAuthCredentials } from "@mariozechner/pi-ai/oauth";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "../infra/net/undici-global-dispatcher.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/upsert-with-lock.js";
+import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import { loadConfig, mutateConfigFile } from "../config/config.js";
 import { sendJson, sendInvalidRequest } from "./http-common.js";
@@ -451,6 +452,123 @@ async function handleComplete(req: IncomingMessage, res: ServerResponse): Promis
   }
 }
 
+/**
+ * Reverse `activateCodexInConfig`: pull codex out of the agent model
+ * primaries, drop the codex plugin entry. Defensive — if the customer
+ * was on a custom model before connecting, we don't know what to put
+ * back. Reset to `router/auto` (the pandabots-default fallback) which
+ * matches what convex/deployments.ts's updateDeploymentModel emits for
+ * `mode: "pandabots-default"`. The customer can re-pick BYOM after.
+ */
+async function deactivateCodexInConfig(): Promise<void> {
+  try {
+    await mutateConfigFile({
+      mutate: (draft) => {
+        const next = draft as any;
+        // Remove codex plugin entry if present (no-op if not).
+        if (next.plugins?.entries?.codex) {
+          delete next.plugins.entries.codex;
+        }
+        // Reset every agent's primary model back to the default
+        // router route. Heartbeats/fallback chain remains untouched.
+        const fallbackPrimary = "router/auto";
+        const agents = next.agents ?? {};
+        if (agents && typeof agents === "object") {
+          if (agents.defaults && typeof agents.defaults === "object") {
+            agents.defaults.model = agents.defaults.model ?? {};
+            agents.defaults.model.primary = fallbackPrimary;
+          }
+          if (Array.isArray(agents.list)) {
+            agents.list = agents.list.map((a: any) => {
+              if (!a || typeof a !== "object") return a;
+              const model = a.model ?? {};
+              return { ...a, model: { ...model, primary: fallbackPrimary } };
+            });
+          }
+        }
+        next.agents = agents;
+      },
+    });
+  } catch (err) {
+    throw new Error(
+      `Failed to reset model config: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/**
+ * Disconnect ChatGPT — removes the OAuth profile from every agent's
+ * auth-profiles.json, drops the codex plugin entry, resets every
+ * agent's model.primary back to router/auto.
+ *
+ * Idempotent: calling on a not-connected VM is a no-op (returns
+ * { removed: 0 }).
+ */
+async function handleLogout(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const cfg = loadConfig();
+  const agentIds = listAgentIds(cfg);
+  const profileId = buildCodexProfileId();
+  let removed = 0;
+  let kept = 0;
+  const errors: Array<{ agentId: string; error: string }> = [];
+
+  for (const agentId of agentIds) {
+    const agentDir = resolveAgentDir(cfg, agentId);
+    try {
+      const result = await updateAuthProfileStoreWithLock({
+        agentDir,
+        updater: (store) => {
+          if (store.profiles?.[profileId]) {
+            delete store.profiles[profileId];
+            // Also clean up any provider-order entry that referenced
+            // this profile, so the next openai-codex lookup doesn't
+            // resolve a stale id.
+            if (store.order && Array.isArray(store.order["openai-codex"])) {
+              store.order["openai-codex"] = store.order["openai-codex"].filter(
+                (id: string) => id !== profileId,
+              );
+              if (store.order["openai-codex"].length === 0) {
+                delete store.order["openai-codex"];
+              }
+            }
+            return true;
+          }
+          return false;
+        },
+      });
+      if (result) {
+        removed++;
+      } else {
+        kept++;
+      }
+    } catch (err) {
+      errors.push({
+        agentId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // Reset model config so future agent runs go back to the router. If
+  // any of the agent-store removals failed we still try this — the
+  // config reset is independent of the auth-store cleanup and useful
+  // even on partial success.
+  let configError: string | null = null;
+  try {
+    await deactivateCodexInConfig();
+  } catch (err) {
+    configError = err instanceof Error ? err.message : String(err);
+  }
+
+  sendJson(res, 200, {
+    ok: errors.length === 0 && !configError,
+    removed,
+    kept,
+    errors,
+    configError,
+  });
+}
+
 async function handleCancel(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const body = await readJsonBody<{ sessionId?: unknown }>(req);
   const sessionId = typeof body?.sessionId === "string" ? body.sessionId : "";
@@ -503,6 +621,10 @@ export async function tryHandleCodexAuthRoute(
   }
   if (subPath === "/codex/auth/cancel" && req.method === "POST") {
     await handleCancel(req, res);
+    return true;
+  }
+  if (subPath === "/codex/auth/logout" && req.method === "POST") {
+    await handleLogout(req, res);
     return true;
   }
   return false;
