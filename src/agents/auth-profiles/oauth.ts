@@ -1,6 +1,8 @@
 import {
   getOAuthApiKey,
+  getOAuthProvider,
   getOAuthProviders,
+  registerOAuthProvider,
   type OAuthCredentials,
   type OAuthProvider,
 } from "@mariozechner/pi-ai/oauth";
@@ -23,6 +25,11 @@ import {
   areOAuthCredentialsEquivalent,
   readManagedExternalCliCredential,
 } from "./external-cli-sync.js";
+// MC custom: register the hand-rolled Kimi device-code OAuth provider BEFORE the
+// OAUTH_PROVIDER_IDS snapshot below (a load-time Set) — otherwise `kimi` would
+// not be recognized as an OAuth provider and refresh/use would fail. pi-ai has
+// no Kimi provider; this is the gateway-side half of the desktop's registration.
+import { kimiOAuthProvider } from "./kimi-oauth-provider.js";
 import { ensureAuthStoreFile, resolveAuthStorePath } from "./paths.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
@@ -51,6 +58,15 @@ function listOAuthProviderIds(): string[] {
         : undefined,
     )
     .filter((providerId): providerId is string => typeof providerId === "string");
+}
+
+// MC custom: idempotently register Kimi before snapshotting the id set.
+if (
+  typeof registerOAuthProvider === "function" &&
+  typeof getOAuthProvider === "function" &&
+  !getOAuthProvider("kimi")
+) {
+  registerOAuthProvider(kimiOAuthProvider);
 }
 
 const OAUTH_PROVIDER_IDS = new Set<string>(listOAuthProviderIds());
