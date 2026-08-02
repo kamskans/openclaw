@@ -22,9 +22,11 @@
  *   POST /mc/v1/browser/navigate                   → navigate Chromium to a URL via CDP
  */
 
+import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { STATE_DIR } from "../config/paths.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
   DEFAULT_AGENTS_FILENAME,
@@ -890,6 +892,80 @@ async function handleSetPause(
  * Returns `true` if the request was handled, `false` if it did not match any
  * MC API route (so the caller should try the next handler).
  */
+// ── Route: GET /mc/v1/media?path=<abs> ──────────────────────────────────────
+//
+// Serve a generated-media file (image/audio/video the agent produced, surfaced
+// in transcripts as `MEDIA:<path>`) so chat UIs can render it inline instead of
+// showing a dead local path. Auth is the normal gateway token (header or, for
+// media only, `?token=` — see the entry point). The path is confined to the
+// OpenClaw state dir via realpath, so a stolen/echoed MEDIA: string can never
+// read arbitrary files, and only known media extensions are served.
+const MEDIA_CONTENT_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
+  ".m4a": "audio/mp4",
+  ".opus": "audio/ogg",
+  ".ogg": "audio/ogg",
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+};
+
+async function handleGetMedia(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  const raw = String(url.searchParams.get("path") || "").trim();
+  if (!raw || !path.isAbsolute(raw)) {
+    sendInvalidRequest(res, "media requires an absolute path");
+    return;
+  }
+  const contentType = MEDIA_CONTENT_TYPES[path.extname(raw).toLowerCase()];
+  if (!contentType) {
+    sendInvalidRequest(res, "unsupported media type");
+    return;
+  }
+  let resolved: string;
+  let stateRoot: string;
+  try {
+    resolved = await fsPromises.realpath(raw);
+    stateRoot = await fsPromises.realpath(STATE_DIR);
+  } catch {
+    sendJson(res, 404, { error: "media not found" });
+    return;
+  }
+  if (resolved !== stateRoot && !resolved.startsWith(stateRoot + path.sep)) {
+    sendJson(res, 404, { error: "media not found" });
+    return;
+  }
+  let stat: fs.Stats;
+  try {
+    stat = await fsPromises.stat(resolved);
+  } catch {
+    sendJson(res, 404, { error: "media not found" });
+    return;
+  }
+  if (!stat.isFile()) {
+    sendJson(res, 404, { error: "media not found" });
+    return;
+  }
+  res.writeHead(200, {
+    "Content-Type": contentType,
+    "Content-Length": stat.size,
+    "Cache-Control": "private, max-age=3600",
+  });
+  const stream = fs.createReadStream(resolved);
+  stream.on("error", () => {
+    try {
+      res.destroy();
+    } catch {
+      /* already gone */
+    }
+  });
+  stream.pipe(res);
+}
+
 export async function handleMcApiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -901,6 +977,17 @@ export async function handleMcApiHttpRequest(
   // Quick prefix check — bail early if not our route
   if (!pathname.startsWith(MC_API_PREFIX)) {
     return false;
+  }
+
+  // Media is loaded by <img>/<video> tags, which cannot attach an Authorization
+  // header — accept the gateway token as a query param for THAT route only and
+  // feed it through the normal authorizer. Every other route stays header-only.
+  if (
+    pathname === `${MC_API_PREFIX}/media` &&
+    !req.headers.authorization &&
+    url.searchParams.get("token")
+  ) {
+    req.headers.authorization = `Bearer ${url.searchParams.get("token")}`;
   }
 
   // Authenticate
@@ -959,6 +1046,12 @@ export async function handleMcApiHttpRequest(
   // ── POST /mc/v1/pairing/approve ────────────────────────────────────────
   if (subPath === "/pairing/approve" && req.method === "POST") {
     await handlePairingApprove(req, res);
+    return true;
+  }
+
+  // ── GET /mc/v1/media?path= ───────────────────────────────────────────
+  if (subPath === "/media" && req.method === "GET") {
+    await handleGetMedia(req, res, url);
     return true;
   }
 
