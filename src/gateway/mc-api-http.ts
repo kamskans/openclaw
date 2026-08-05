@@ -38,7 +38,7 @@ import {
   DEFAULT_SOUL_FILENAME,
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_USER_FILENAME,
-  isWorkspaceOnboardingCompleted,
+  isWorkspaceSetupCompleted,
 } from "../agents/workspace.js";
 import { notifyPairingApproved } from "../channels/plugins/pairing.js";
 import { loadConfig } from "../config/config.js";
@@ -207,7 +207,7 @@ async function handleListFiles(
 
   let hideBootstrap = false;
   try {
-    hideBootstrap = await isWorkspaceOnboardingCompleted(workspaceDir);
+    hideBootstrap = await isWorkspaceSetupCompleted(workspaceDir);
   } catch {
     // Fall back to showing all files
   }
