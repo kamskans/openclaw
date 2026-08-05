@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
@@ -30,6 +29,7 @@ import {
   type ResolvedAgentConfig,
 } from "./agent-scope-config.js";
 import { resolveEffectiveAgentSkillFilter } from "./skills/agent-filter.js";
+import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 export {
   listAgentEntries,
   listAgentIds,
